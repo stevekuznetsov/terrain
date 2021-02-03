@@ -1,0 +1,19 @@
+{
+  "printer": {
+    "xy_resolution_microns": 35,
+    "z_resolution_microns": 30,
+    "bed_width_millimeters": 135,
+    "bed_length_millimeters": 75,
+    "z_axis_height_millimeters": 130
+  },
+  "model": {
+    "xy_scale": 1.0,
+    "z_scale": 6.0
+  },
+  "raster": {
+    "path": "/home/stevekuznetsov/Downloads/n/CougarMountain_2016_dtm_maintainedclip_geotiff/CougarMountain_2016_dtm_maintainedclip.tif",
+    "bounds": {
+      "lower": 60.0
+    }
+  }
+}

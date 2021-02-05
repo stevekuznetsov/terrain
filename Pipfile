@@ -1,0 +1,22 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+jsonschema = "*"
+argparse = "*"
+autopep8 = "*"
+numpy = "*"
+gdal = "==3.0.4"
+scipy = "*"
+datetime = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.8"
+
+[scripts]
+terrain = "python ./terrain.py"
+pep8 = "autopep8 -riv --max-line-length 150"

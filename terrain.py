@@ -3,6 +3,7 @@
 import argparse
 from config.load import load
 from tiff.resize import resize
+from tiff.parcels import subdivide
 import logging
 from pathlib import Path
 
@@ -18,7 +19,8 @@ def main():
     logging.info("Initializing cache to " + str(cache_dir))
     cache_dir.mkdir(parents=True, exist_ok=True)
     conf["meta"] = {"cache": cache_dir}
-    resize(conf)
+    data = resize(conf)
+    parcels = subdivide(conf, data)
 
 
 if __name__ == '__main__':

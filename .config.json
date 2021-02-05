@@ -8,7 +8,8 @@
   },
   "model": {
     "xy_scale": 1.0,
-    "z_scale": 6.0
+    "z_scale": 6.0,
+    "surface_thickness_millimeters": 2.0
   },
   "raster": {
     "path": "/home/stevekuznetsov/Downloads/n/CougarMountain_2016_dtm_maintainedclip_geotiff/CougarMountain_2016_dtm_maintainedclip.tif",

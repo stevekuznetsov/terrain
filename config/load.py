@@ -46,9 +46,20 @@ schema = {
                 # are to be assembled after the fact into the final model. Optional, will default to something
                 # sensible to maximize the printer's available bed.
                 "parcel_width_millimeters": {"type": "number"},
-                # parcel_aspect_ratio is the ratio of a parcel's width to it's height. Optional, defaults to 1.
+                # parcel_aspect_ratio is the ratio of a parcel's width to it's height. Optional, defaults to the
+                # aspect ratio of the overall model so that all parcels are identical.
                 "parcel_aspect_ratio": {"type": "number"},
+                # surface_thickness_millimeters is the minimum thickness in millimeters of the model surface that
+                # will be printed. Post-processing steps that add support underneath it may increase this thickness.
+                # A thickness of 2mm is generally sufficient for high fidelity/low error prints.
+                "surface_thickness_millimeters": {"type": "number"},
+                # flange_thickness_millimeters is the thickness in millimeters of the flanges that are added to
+                # the boundaries of each parcel in order to generate planar surfaces that are easy to orient and
+                # glue together. Optional, defaults to twice the surface thickness (for a total thickness at the
+                # flange of three times the surface thickness).
+                "flange_thickness_millimeters": {"type": "number"},
             },
+            "required": ["surface_thickness_millimeters"],
         },
         "raster": {
             "type": "object",
@@ -75,6 +86,10 @@ schema = {
 
 
 def validate(data):
+    """
+    validate ensures that user-provided configuration is correct
+    :param data: user-provided configuration
+    """
     printer_dimensions_provided = 0
     if "bed_width_millimeters" in data["printer"]:
         printer_dimensions_provided += 1
@@ -99,8 +114,16 @@ def validate(data):
     elif model_dimensions_provided == 0 and "xy_scale" not in data["model"]:
         raise ValueError("model.{width,length}_millimeters or model.xy_scale must be set")
 
+    if "flange_thickness_millimeters" not in data["model"]:
+        data["model"]["flange_thickness_millimeters"] = 2*data["model"]["surface_thickness_millimeters"]
+
 
 def load(path):
+    """
+    load loads and validates user-provided configuration from disk
+    :param path: path to user-provided configuration
+    :return: user-provided configuration
+    """
     with open(path) as f:
         data = json.load(f)
         jsonschema.validate(instance=data, schema=schema)

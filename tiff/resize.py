@@ -20,8 +20,13 @@ def resize(config):
     :param config: configuration from the user
     """
     if config["meta"]["cache"].joinpath(__CACHE_SCALED_TIF__).exists():
-        logging.info("Cached raster exists for re-sized GeoTiff, skipping...")
-        return
+        with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__)) as f:
+            config["raster"]["info"] = json.load(f)
+        logging.info("Cached raster exists for re-sized GeoTiff, loading...")
+        load_start = datetime.now()
+        dataset = gdal.Open(config["raster"]["path"])
+        logging.debug("Loading GeoTiff took {}.".format(datetime.now() - load_start))
+        return dataFromTif(dataset)
 
     logging.debug("Loading GeoTiff...")
     load_start = datetime.now()
@@ -49,15 +54,7 @@ def resize(config):
             logging.error("Difference between pixel width and height is {}%, assuming an equal grid may cause "
                           "artifacts.".format(difference))
 
-    band = dataset.GetRasterBand(1)
-    band_data_type = gdal.GetDataTypeName(band.DataType)
-    array_data_type = numpy.float64
-    if band_data_type == "Float32":
-        array_data_type = numpy.float32
-    logging.info("Reading GeoTiff data into an array...")
-    read_start = datetime.now()
-    data = band.ReadAsArray().astype(array_data_type)
-    logging.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))
+    data = dataFromTif(dataset)
 
     config["raster"]["info"] = {
         "pixel_size": pixel_width,
@@ -71,10 +68,6 @@ def resize(config):
     )
     logging.debug("Source raster upper left corner is at ({:.4f},{:.4f}).".format(transform[0], transform[3]))
     shape, scale = scaledRasterDimensions(config["printer"], config["model"], config["raster"]["info"])
-
-    logging.debug("Filtering out NaN values and applying user's bounds to the raster...")
-    if band.GetNoDataValue() is not None:
-        data = numpy.where(numpy.isclose(data, band.GetNoDataValue()), numpy.nan, data)
 
     if "bounds" in config["raster"]:
         if "lower" in config["raster"]["bounds"]:
@@ -104,15 +97,39 @@ def resize(config):
     driver = gdal.GetDriverByName("GTiff")
     output_tif = driver.Create(
         str(config["meta"]["cache"].joinpath(__CACHE_SCALED_TIF__)),
-        scaled.shape[1], scaled.shape[0], 1, band.DataType
+        scaled.shape[1], scaled.shape[0], 1, dataset.GetRasterBand(1).DataType
     )
     output_tif.SetGeoTransform(dataset.GetGeoTransform())
     output_tif.SetProjection(dataset.GetProjection())
-    scaled = numpy.where(numpy.isnan, -1, scaled)
-    output_tif.GetRasterBand(1).WriteArray(scaled)
+    nan_replaced = numpy.where(numpy.isnan, -1, scaled)
+    output_tif.GetRasterBand(1).WriteArray(nan_replaced)
     output_tif.GetRasterBand(1).SetNoDataValue(-1)
     output_tif.FlushCache()
     logging.debug("Saving scaled GeoTiff took {}.".format(datetime.now() - save_start))
+
+    return scaled
+
+
+def dataFromTif(dataset):
+    """
+    dataFromTif returns a numpy array holding the contents of the first raster band in the dataset
+    :param dataset: dataset laoded from a GeoTiff
+    :return: numpy array of data
+    """
+    band = dataset.GetRasterBand(1)
+    band_data_type = gdal.GetDataTypeName(band.DataType)
+    array_data_type = numpy.float64
+    if band_data_type == "Float32":
+        array_data_type = numpy.float32
+    logging.info("Reading GeoTiff data into an array...")
+    read_start = datetime.now()
+    data = band.ReadAsArray().astype(array_data_type)
+    logging.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))
+
+    logging.debug("Filtering out NaN values and applying user's bounds to the raster...")
+    if dataset.GetRasterBand(1).GetNoDataValue() is not None:
+        data = numpy.where(numpy.isclose(data, dataset.GetRasterBand(1).GetNoDataValue()), numpy.nan, data)
+    return data
 
 
 def scaledRasterDimensions(printer, model, raster_info):

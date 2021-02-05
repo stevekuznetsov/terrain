@@ -11,6 +11,7 @@ numpy = "*"
 gdal = "==3.0.4"
 scipy = "*"
 datetime = "*"
+pyomo = "*"
 
 [dev-packages]
 

@@ -12,6 +12,7 @@ gdal = "==3.0.4"
 scipy = "*"
 datetime = "*"
 pyomo = "*"
+matplotlib = "*"
 
 [dev-packages]
 

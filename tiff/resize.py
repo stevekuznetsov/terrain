@@ -22,7 +22,7 @@ def resize(config):
     if config["meta"]["cache"].joinpath(__CACHE_SCALED_TIF__).exists():
         with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__)) as f:
             config["raster"]["info"] = json.load(f)
-        logging.info("Cached raster exists for re-sized GeoTiff, loading...")
+        logging.info("Cached raster exists for re-sized GeoTiff, loading it...")
         load_start = datetime.now()
         dataset = gdal.Open(config["raster"]["path"])
         logging.debug("Loading GeoTiff took {}.".format(datetime.now() - load_start))
@@ -86,6 +86,9 @@ def resize(config):
     logging.debug("Scaling GeoTiff took {}.".format(datetime.now() - scale_start))
     logging.info("GeoTiff scaled to {}".format(scaled.shape))
 
+    # We now want to transform the Z axis to the size of the model, not the height of the surface in real life
+    scaled = scaled * config["model"]["z_scale"] / config["raster"]["info"]["scale"]
+
     logging.debug("Saving raster info...")
     config_start = datetime.now()
     with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__), "w") as f:
@@ -117,16 +120,15 @@ def dataFromTif(dataset):
     :return: numpy array of data
     """
     band = dataset.GetRasterBand(1)
-    band_data_type = gdal.GetDataTypeName(band.DataType)
     array_data_type = numpy.float64
-    if band_data_type == "Float32":
+    if band.DataType == gdal.GDT_Float32:
         array_data_type = numpy.float32
     logging.info("Reading GeoTiff data into an array...")
     read_start = datetime.now()
     data = band.ReadAsArray().astype(array_data_type)
     logging.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))
 
-    logging.debug("Filtering out NaN values and applying user's bounds to the raster...")
+    logging.debug("Filtering out NaN values and applying user's bounds to the raster.")
     if dataset.GetRasterBand(1).GetNoDataValue() is not None:
         data = numpy.where(numpy.isclose(data, dataset.GetRasterBand(1).GetNoDataValue()), numpy.nan, data)
     return data
@@ -195,8 +197,6 @@ def scaledRasterDimensions(printer, model, raster_info):
             "Neither model size nor model scaling are set in config. This should have failed validation!"
         )
 
-    logging.info(
-        "Final model scale will be 1:{:.2f}".format(
-            raster_info["pixel_size"] / (output_scale[0] * xy_resolution_meters))
-    )
+    raster_info["scale"] = raster_info["pixel_size"] / (output_scale[0] * xy_resolution_meters)
+    logging.info("Final model scale will be 1:{:.2f}.".format(raster_info["scale"]))
     return output_shape, output_scale

@@ -116,6 +116,8 @@ def validate(data):
 
     if "flange_thickness_millimeters" not in data["model"]:
         data["model"]["flange_thickness_millimeters"] = 2*data["model"]["surface_thickness_millimeters"]
+    if "z_scale" not in data["model"]:
+        data["model"] = 1.0
 
 
 def load(path):

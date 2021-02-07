@@ -1,5 +1,4 @@
 from datetime import datetime
-import logging
 import json
 import numpy
 from osgeo import gdal
@@ -12,26 +11,32 @@ __CACHE_SCALED_TIF__ = "scaled.tif"
 __CACHE_RASTER_INFO__ = "raster_info.json"
 
 
-def resize(config):
+def resize(config, logger):
     """
     resize will load the raster data as configured by the user, scale it to fit the output model,
     and save that to an intermediate GeoTiff file. If this file already exists, we do nothing.
 
+    :param logger: logger
     :param config: configuration from the user
+    :returns: a closure that, when evaluated, will yield the dataset
     """
-    if config["meta"]["cache"].joinpath(__CACHE_SCALED_TIF__).exists():
-        with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__)) as f:
-            config["raster"]["info"] = json.load(f)
-        logging.info("Cached raster exists for re-sized GeoTiff, loading it...")
-        load_start = datetime.now()
-        dataset = gdal.Open(config["raster"]["path"])
-        logging.debug("Loading GeoTiff took {}.".format(datetime.now() - load_start))
-        return dataFromTif(dataset)
+    cache = config["meta"]["cache"].joinpath(__CACHE_SCALED_TIF__)
+    if cache.exists():
+        def get_data():
+            with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__)) as f:
+                config["raster"]["info"] = json.load(f)
+            logger.info("Cached raster exists for re-sized GeoTiff, loading it...")
+            cached_load_start = datetime.now()
+            cached_dataset = gdal.Open(str(cache))
+            logger.debug("Loading GeoTiff took {}.".format(datetime.now() - cached_load_start))
+            return dataFromTif(cached_dataset, logger)
 
-    logging.debug("Loading GeoTiff...")
+        return get_data
+
+    logger.debug("Loading GeoTiff...")
     load_start = datetime.now()
     dataset = gdal.Open(config["raster"]["path"])
-    logging.debug("Loading GeoTiff took {}.".format(datetime.now() - load_start))
+    logger.debug("Loading GeoTiff took {}.".format(datetime.now() - load_start))
 
     # The default GDAL load will only read the coordinate system for the projection, not any for
     # the vertical coordinates. However, the spec declares that the *same* coordinate system is
@@ -40,19 +45,19 @@ def resize(config):
     spatial_reference = osr.SpatialReference()
     spatial_reference.ImportFromWkt(dataset.GetProjection())
     unit = float(spatial_reference.GetAttrValue("UNIT", 1))
-    logging.debug("Source raster data uses {}m units for the X/Y projection.".format(unit))
+    logger.debug("Source raster data uses {}m units for the X/Y projection.".format(unit))
     transform = dataset.GetGeoTransform()
 
     # In a north up image, transform[1] is the pixel width, transform [5] is the pixel height.
     # The upper left corner of the upper left pixel is at position (transform[0],transform[3]).
     pixel_width, pixel_height = abs(transform[1] * unit), abs(transform[5] * unit)
     if pixel_height != pixel_width:
-        logging.debug("Pixel width ({}m) is not the same as pixel height ({}m). Will assume even grid spacing using "
-                      "width.".format(pixel_width, pixel_height))
+        logger.debug("Pixel width ({}m) is not the same as pixel height ({}m). Will assume even grid spacing using "
+                     "width.".format(pixel_width, pixel_height))
         difference = (pixel_height / pixel_width - 1) * 100
         if difference > 5:
-            logging.error("Difference between pixel width and height is {}%, assuming an equal grid may cause "
-                          "artifacts.".format(difference))
+            logger.error("Difference between pixel width and height is {}%, assuming an equal grid may cause "
+                         "artifacts.".format(difference))
 
     data = dataFromTif(dataset)
 
@@ -61,12 +66,12 @@ def resize(config):
         "x_size": data.shape[0],
         "y_size": data.shape[1],
     }
-    logging.info("Source raster data has shape ({}, {}) and uses a {}m grid.".format(
+    logger.info("Source raster data has shape ({}, {}) and uses a {}m grid.".format(
         config["raster"]["info"]["x_size"],
         config["raster"]["info"]["y_size"],
         config["raster"]["info"]["pixel_size"])
     )
-    logging.debug("Source raster upper left corner is at ({:.4f},{:.4f}).".format(transform[0], transform[3]))
+    logger.debug("Source raster upper left corner is at ({:.4f},{:.4f}).".format(transform[0], transform[3]))
     shape, scale = scaledRasterDimensions(config["printer"], config["model"], config["raster"]["info"])
 
     if "bounds" in config["raster"]:
@@ -75,7 +80,7 @@ def resize(config):
         if "upper" in config["raster"]["bounds"]:
             data = numpy.where(data > config["raster"]["bounds"]["upper"], numpy.nan, data)
 
-    logging.debug("Scaling data to final dimensions...")
+    logger.debug("Scaling data to final dimensions...")
     scale_start = datetime.now()
     if scale != (1, 1):
         scaled = ndimage.zoom(data, zoom=scale)
@@ -83,19 +88,19 @@ def resize(config):
         # it's reasonably common for a user to just ask to use their printer's native resolution,
         # so no scaling will occur - do nothing to save time
         scaled = numpy.copy(data)
-    logging.debug("Scaling GeoTiff took {}.".format(datetime.now() - scale_start))
-    logging.info("GeoTiff scaled to {}".format(scaled.shape))
+    logger.debug("Scaling GeoTiff took {}.".format(datetime.now() - scale_start))
+    logger.info("GeoTiff scaled to {}".format(scaled.shape))
 
     # We now want to transform the Z axis to the size of the model, not the height of the surface in real life
-    scaled = scaled * config["model"]["z_scale"] / config["raster"]["info"]["scale"]
+    scaled = scaled * unit * config["model"]["z_scale"] / config["raster"]["info"]["scale"]
 
-    logging.debug("Saving raster info...")
+    logger.debug("Saving raster info...")
     config_start = datetime.now()
     with open(config["meta"]["cache"].joinpath(__CACHE_RASTER_INFO__), "w") as f:
         json.dump(config["raster"]["info"], f)
-    logging.debug("Saving raster info took {}.".format(datetime.now() - config_start))
+    logger.debug("Saving raster info took {}.".format(datetime.now() - config_start))
 
-    logging.debug("Saving scaled GeoTiff...")
+    logger.debug("Saving scaled GeoTiff...")
     save_start = datetime.now()
     driver = gdal.GetDriverByName("GTiff")
     output_tif = driver.Create(
@@ -104,46 +109,48 @@ def resize(config):
     )
     output_tif.SetGeoTransform(dataset.GetGeoTransform())
     output_tif.SetProjection(dataset.GetProjection())
-    nan_replaced = numpy.where(numpy.isnan, -1, scaled)
+    nan_replaced = numpy.where(numpy.isnan(scaled), -1, scaled)
     output_tif.GetRasterBand(1).WriteArray(nan_replaced)
     output_tif.GetRasterBand(1).SetNoDataValue(-1)
     output_tif.FlushCache()
-    logging.debug("Saving scaled GeoTiff took {}.".format(datetime.now() - save_start))
+    logger.debug("Saving scaled GeoTiff took {}.".format(datetime.now() - save_start))
 
-    return scaled
+    return lambda: scaled
 
 
-def dataFromTif(dataset):
+def dataFromTif(dataset, logger):
     """
     dataFromTif returns a numpy array holding the contents of the first raster band in the dataset
-    :param dataset: dataset laoded from a GeoTiff
+    :param logger: logger
+    :param dataset: dataset loaded from a GeoTiff
     :return: numpy array of data
     """
     band = dataset.GetRasterBand(1)
     array_data_type = numpy.float64
     if band.DataType == gdal.GDT_Float32:
         array_data_type = numpy.float32
-    logging.info("Reading GeoTiff data into an array...")
+    logger.info("Reading GeoTiff data into an array...")
     read_start = datetime.now()
     data = band.ReadAsArray().astype(array_data_type)
-    logging.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))
+    logger.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))
 
-    logging.debug("Filtering out NaN values and applying user's bounds to the raster.")
+    logger.debug("Filtering out NaN values and applying user's bounds to the raster.")
     if dataset.GetRasterBand(1).GetNoDataValue() is not None:
         data = numpy.where(numpy.isclose(data, dataset.GetRasterBand(1).GetNoDataValue()), numpy.nan, data)
     return data
 
 
-def scaledRasterDimensions(printer, model, raster_info):
+def scaledRasterDimensions(printer, model, raster_info, logger):
     """
     scaledRasterDimensions determines the scaling factors which which we need to re-process the input
     raster in order to make sure that it has the same level of detail as the user has requested in the
     final model given their printer's capabilities.
 
+    :param logger: logger
     :param printer: configuration for the printer from the user
     :param model: configuration for the model from the user
     :param raster_info: information about the raster
-    :return: the output shape in pixels and scaling factors to acheive that in X and Y
+    :return: the output shape in pixels and scaling factors to achieve that in X and Y
     """
     xy_resolution_meters = float(printer["xy_resolution_microns"]) / float(1e6)
 
@@ -151,7 +158,7 @@ def scaledRasterDimensions(printer, model, raster_info):
         # the user wants a specific output size for their model
         model_x_pixel_count = (float(model["width_millimeters"]) / float(1e3)) / xy_resolution_meters
         model_y_pixel_count = (float(model["length_millimeters"]) / float(1e3)) / xy_resolution_meters
-        logging.debug(
+        logger.debug(
             "With a resolution of {}μm and a model size of {}mm x {}mm, model will be {:.2f} x {:.2f} pixels.".format(
                 printer["xy_resolution_microns"],
                 model["width_millimeters"], model["length_millimeters"],
@@ -161,8 +168,8 @@ def scaledRasterDimensions(printer, model, raster_info):
         x_scale = model_x_pixel_count / float(raster_info["x_size"])
         y_scale = model_y_pixel_count / float(raster_info["y_size"])
         if x_scale > 1.0 or y_scale > 1.0:
-            logging.warn("In achieving the requested model size, the input raster will need to be over-sampled. "
-                         "Consider reducing the model size to match the native resolution of your printer.")
+            logger.warn("In achieving the requested model size, the input raster will need to be over-sampled. "
+                        "Consider reducing the model size to match the native resolution of your printer.")
         output_shape = (round(model_x_pixel_count), round(model_y_pixel_count))
         output_scale = (x_scale, y_scale)
     elif "xy_scale" in model:
@@ -170,7 +177,7 @@ def scaledRasterDimensions(printer, model, raster_info):
         def pixels_to_mm(px):
             return float(px) * xy_resolution_meters * float(1e3)
 
-        logging.debug(
+        logger.debug(
             "With a size of {} x {} pixels, the raster would have a size of {:.2f}mm x {:.2f}mm at the printer's "
             "native resolution of {}μm.".format(
                 raster_info["x_size"], raster_info["y_size"],
@@ -181,7 +188,7 @@ def scaledRasterDimensions(printer, model, raster_info):
 
         model_x_pixel_count = round(float(raster_info["x_size"]) * float(model["xy_scale"]))
         model_y_pixel_count = round(float(raster_info["y_size"]) * float(model["xy_scale"]))
-        logging.info(
+        logger.info(
             "With a size of {} x {} pixels, the raster will have a size of {:.2f}mm x {:.2f}mm using a scaling factor "
             "of {:.2f}.".format(
                 model_x_pixel_count, model_y_pixel_count,
@@ -198,5 +205,5 @@ def scaledRasterDimensions(printer, model, raster_info):
         )
 
     raster_info["scale"] = raster_info["pixel_size"] / (output_scale[0] * xy_resolution_meters)
-    logging.info("Final model scale will be 1:{:.2f}.".format(raster_info["scale"]))
+    logger.info("Final model scale will be 1:{:.2f}.".format(raster_info["scale"]))
     return output_shape, output_scale

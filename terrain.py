@@ -13,18 +13,18 @@ def main():
     parser.add_argument("--configuration", help="Path to the configuration.", required=True)
     parser.add_argument("--loglevel", help="Logging verbosity level.", default="INFO")
     args = parser.parse_args()
-    logging.basicConfig(
-        level=args.loglevel.upper(),
-        format='%(asctime)s %(levelname)-8s %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
+    logger = logging.getLogger("terrain")
+    logger.setLevel(args.loglevel.upper())
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
+    logger.addHandler(handler)
     conf, hash = load(args.configuration)
     cache_dir = Path.home().joinpath("terrain", hash)
-    logging.info("Initializing cache to " + str(cache_dir))
+    logger.info("Initializing cache to " + str(cache_dir))
     cache_dir.mkdir(parents=True, exist_ok=True)
-    conf["meta"] = {"cache": cache_dir}
-    data = resize(conf)
-    parcels = subdivide(conf, data)
+    conf["meta"] = {"cache": cache_dir, "logger": logger}
+    data = resize(conf, logger)
+    parcels = subdivide(conf, data, logger)
 
 
 if __name__ == '__main__':

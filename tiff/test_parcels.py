@@ -1,3 +1,4 @@
+import logging
 import unittest
 import numpy
 from tiff import parcels
@@ -16,7 +17,7 @@ class TestParcels(unittest.TestCase):
             }
         }
         parcel_shape = (7, 6)
-        with_flanges = parcels.build_flanges(config, dataset, parcel_shape)
+        with_flanges = parcels.build_flanges(config, dataset, parcel_shape, logging.getLogger("test"))
         expected = numpy.array([
             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
             [0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1, 0],

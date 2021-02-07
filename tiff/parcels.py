@@ -12,8 +12,8 @@ __CACHE_PARCEL_DIR__ = "parcels"
 
 def subdivide(config, dataset, logger):
     """
-    subdivide breaks the dataset up into parcels for printing, while downsampling the data to a reasonable resolution
-    and adding features of use in assembly
+    subdivide breaks the dataset up into parcels for printing, while down-sampling the data to a reasonable resolution
+    on the bottom surface and adding features of use in assembly
     :param logger: logger
     :param config: configuration from the user
     :param dataset: numpy array of raster data resized to correct dimensions
@@ -37,8 +37,11 @@ def subdivide(config, dataset, logger):
 
     logger.info("Saving individual parcels...")
     all_start = datetime.now()
-    save_parcels("top", dataset, parcel_shape, cache, logger)
-    save_parcels("bottom", with_flanges, parcel_shape, cache, logger)
+    maximum_height_millimeters = numpy.finfo(float).max
+    if "z_axis_height_millimeters" in config["printer"]:
+        maximum_height_millimeters = config["printer"]["z_axis_height_millimeters"]
+    save_parcels("top", dataset, parcel_shape, cache, maximum_height_millimeters, logger)
+    save_parcels("bottom", with_flanges, parcel_shape, cache, maximum_height_millimeters, logger)
     logger.debug("Saving all parcels took {}.".format(datetime.now() - all_start))
 
     return ParcelLoader(cache, logger)
@@ -220,9 +223,10 @@ def parcels(dataset, parcel_shape):
         yield (i, j), dataset[i_ == i][:, j_ == j]
 
 
-def save_parcels(name, dataset, parcel_shape, cache, logger):
+def save_parcels(name, dataset, parcel_shape, cache, maximum_height, logger):
     """
     Save parcels to disk under the cache.
+    :param maximum_height: maximum height of a parcel in mm
     :param logger: logger
     :param name: name of the parcel set
     :param dataset: data to parcel and save
@@ -233,6 +237,17 @@ def save_parcels(name, dataset, parcel_shape, cache, logger):
     cache = cache.joinpath(name)
     cache.mkdir(parents=True, exist_ok=True)
     for index, parcel in parcels(dataset, parcel_shape):
+        if numpy.isnan(parcel).all():
+            logger.debug("Parcel {} contains only NaNs, skipping.".format(index))
+            continue
+        model_height = (numpy.nanmax(parcel) - numpy.nanmin(parcel)) * float(1e3)
+        logger.debug("Parcel {} has a model height of {:.2f}mm.".format(index, model_height))
+        if model_height > maximum_height:
+            raise RuntimeError(
+                "For parcel {}, the physical model height ({:.2f}mm) is larger than the printer's maximum Z axis "
+                "height ({:.2f}mm). It is not possible to print this model - consider lowering the Z scale or using "
+                "automatic parcel selection.".format(index, model_height, maximum_height)
+            )
         logger.debug("Saving {} parcel at {}...".format(name, index))
         save_start = datetime.now()
         driver = gdal.GetDriverByName("GTiff")

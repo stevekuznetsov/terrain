@@ -36,10 +36,6 @@ def main():
     # TODO: optimize supports
     # TODO: make STLs(!!)
 
-    # TODO: we want a data structure coming out of subdivide that yields top/bottom parcels
-    # on demand based on the index, so we're not loading *all* data into memory every time
-    # then we can add a flag to visualize them?
-
 
 if __name__ == '__main__':
     main()

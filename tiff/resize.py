@@ -59,7 +59,7 @@ def resize(config, logger):
             logger.error("Difference between pixel width and height is {}%, assuming an equal grid may cause "
                          "artifacts.".format(difference))
 
-    data = dataFromTif(dataset)
+    data = dataFromTif(dataset, logger)
 
     config["raster"]["info"] = {
         "pixel_size": pixel_width,
@@ -72,7 +72,7 @@ def resize(config, logger):
         config["raster"]["info"]["pixel_size"])
     )
     logger.debug("Source raster upper left corner is at ({:.4f},{:.4f}).".format(transform[0], transform[3]))
-    shape, scale = scaledRasterDimensions(config["printer"], config["model"], config["raster"]["info"])
+    shape, scale = scaledRasterDimensions(config["printer"], config["model"], config["raster"]["info"], logger)
 
     if "bounds" in config["raster"]:
         if "lower" in config["raster"]["bounds"]:
@@ -93,6 +93,17 @@ def resize(config, logger):
 
     # We now want to transform the Z axis to the size of the model, not the height of the surface in real life
     scaled = scaled * unit * config["model"]["z_scale"] / config["raster"]["info"]["scale"]
+    model_max_meters, model_min_meters = numpy.nanmax(scaled), numpy.nanmin(scaled)
+    model_height_millimeters = (model_max_meters - model_min_meters) * float(1e3)
+    logger.debug("The physical model has a height of {:.2f}mm.".format(model_height_millimeters))
+    if "z_axis_height_millimeters" in config["printer"] and \
+            model_height_millimeters > config["printer"]["z_axis_height_millimeters"]:
+        logger.warn(
+            "The physical model height ({:.2f}mm) is larger than the printer's maximum Z axis height ({:.2f}mm). It "
+            "may not be possible to print this model at the current Z scale ({:.2f})".format(
+                model_height_millimeters, config["printer"]["z_axis_height_millimeters"], config["model"]["z_scale"]
+            )
+        )
 
     logger.debug("Saving raster info...")
     config_start = datetime.now()

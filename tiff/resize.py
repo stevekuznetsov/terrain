@@ -140,7 +140,7 @@ def dataFromTif(dataset, logger):
     array_data_type = numpy.float64
     if band.DataType == gdal.GDT_Float32:
         array_data_type = numpy.float32
-    logger.info("Reading GeoTiff data into an array...")
+    logger.debug("Reading GeoTiff data into an array...")
     read_start = datetime.now()
     data = band.ReadAsArray().astype(array_data_type)
     logger.debug("Reading GeoTiff took {}.".format(datetime.now() - read_start))

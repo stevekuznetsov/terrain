@@ -14,13 +14,17 @@ def parcel(data):
     ax = fig.gca(projection='3d')
     ls = LightSource(270, 45)
     cmap = plt.cm.gist_earth
-    z = data[0]
+    z = numpy.ma.masked_invalid(data[0])
     x, y = numpy.meshgrid(numpy.arange(z.shape[1]), numpy.arange(z.shape[0]))
     rgb = ls.shade(z, cmap=cmap, vert_exag=0.1, blend_mode='soft')
-    ax.plot_surface(x, y, z, cmap=cmap, linewidth=0, antialiased=False, shade=False, facecolors=rgb)
+    ax.set_zlim(numpy.nanmin(z), numpy.nanmax(z))
+    ax.plot_surface(x, y, z, cmap=cmap, linewidth=0, antialiased=False, shade=False, facecolors=rgb,
+                    vmin=numpy.nanmin(z), vmax=numpy.nanmax(z))
     ax2 = fig.gca(projection='3d')
-    z2 = data[1]
+    z2 = numpy.ma.masked_invalid(data[1])
     x2, y2 = numpy.meshgrid(numpy.arange(z2.shape[1]), numpy.arange(z2.shape[0]))
     rgb2 = ls.shade(z2, cmap=cmap, vert_exag=0.1, blend_mode='soft')
-    ax2.plot_surface(x2, y2, z2, cmap=cmap, linewidth=0, antialiased=False, shade=False, facecolors=rgb2)
+    ax.set_zlim(numpy.nanmin(z2), numpy.nanmax(z2))
+    ax2.plot_surface(x2, y2, z2, cmap=cmap, linewidth=0, antialiased=False, shade=False, facecolors=rgb2,
+                     vmin=numpy.nanmin(2), vmax=numpy.nanmax(2))
     plt.show()

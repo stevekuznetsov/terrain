@@ -46,9 +46,14 @@ schema = {
                 # are to be assembled after the fact into the final model. Optional, will default to something
                 # sensible to maximize the printer's available bed.
                 "parcel_width_millimeters": {"type": "number"},
-                # parcel_aspect_ratio is the ratio of a parcel's width to it's height. Optional, defaults to the
-                # aspect ratio of the overall model so that all parcels are identical.
-                "parcel_aspect_ratio": {"type": "number"},
+                # parcel_length_millimeters is the length of any individual parcel that will be printed. Parcels
+                # are to be assembled after the fact into the final model. Optional, will default to something
+                # sensible to maximize the printer's available bed.
+                "parcel_length_millimeters": {"type": "number"},
+                # parcel_minimum_width_millimeters is the minimum width of any individual parcel that will be
+                # printed. Parcels are to be assembled after the fact into the final model. Optional, will default
+                # to something sensible for post-processing and assembly.
+                "parcel_minimum_width_millimeters": {"type": "number"},
                 # surface_thickness_millimeters is the minimum thickness in millimeters of the model surface that
                 # will be printed. Post-processing steps that add support underneath it may increase this thickness.
                 # A thickness of 2mm is generally sufficient for high fidelity/low error prints.
@@ -114,8 +119,28 @@ def validate(data):
     elif model_dimensions_provided == 0 and "xy_scale" not in data["model"]:
         raise ValueError("model.{width,length}_millimeters or model.xy_scale must be set")
 
+    parcel_dimensions_provided = 0
+    if "parcel_width_millimeters" in data["model"]:
+        parcel_dimensions_provided += 1
+    if "parcel_length_millimeters" in data["model"]:
+        parcel_dimensions_provided += 1
+    if parcel_dimensions_provided == 1:
+        raise ValueError(
+            "model.parcel_{width,length}_millimeters: either both the parcel width and length must be provided at "
+            "once, or neither, but not just one")
+    elif parcel_dimensions_provided == 2 and "parcel_minimum_width_millimeters" in data["model"]:
+        raise ValueError("model.parcel_{width,length}_millimeters cannot be set at the same time as "
+                         "model.parcel_minimum_width_millimeters")
+
+    if parcel_dimensions_provided == 0 and printer_dimensions_provided == 0:
+        raise ValueError("printer.bed_{width,length}_millimeters: printer bed dimensions are required when requesting "
+                         "an automatic parcel sizing")
+
+    if parcel_dimensions_provided == 0 and "parcel_minimum_width_millimeters" not in data["model"]:
+        data["model"]["parcel_minimum_width_millimeters"] = 25.0
+
     if "flange_thickness_millimeters" not in data["model"]:
-        data["model"]["flange_thickness_millimeters"] = 2*data["model"]["surface_thickness_millimeters"]
+        data["model"]["flange_thickness_millimeters"] = 2 * data["model"]["surface_thickness_millimeters"]
     if "z_scale" not in data["model"]:
         data["model"] = 1.0
 

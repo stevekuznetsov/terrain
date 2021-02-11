@@ -27,7 +27,8 @@ def main():
     conf["meta"] = {"cache": cache_dir, "logger": logger}
     data = resize(conf, logger)
     parcels = subdivide(conf, data, logger)
-    if args.visualize != "":
+    if args.visualize is not None:
+        logger.info("Visualizing parcel {}".format(args.visualize))
         index = [int(i) for i in args.visualize.split(",")]
         data = parcels.parcelAtIndex(index)
         parcel(data)

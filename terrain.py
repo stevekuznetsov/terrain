@@ -34,8 +34,11 @@ def main():
         parcel(data)
         return
 
-    # TODO: optimize supports
-    # TODO: make STLs(!!)
+    # TODO: optimize supports using PyOMO: (??)
+    # TODO: make STLs using CGAL bindings: https://cgal.geometryfactory.com/CGAL/doc/master/Manual/tuto_reconstruction.html
+    # write support and surface points into XYZ https://cgal.geometryfactory.com/CGAL/doc/master/Stream_support/IOStreamSupportedFileFormats.html#IOStreamXYZ
+    # add more points on verticals around the perimeter so advancing front doesn't have to search far
+    # https://github.com/CGAL/cgal-swig-bindings/blob/main/examples/python/Advancing_front_reconstruction_example.py
 
 
 if __name__ == '__main__':

@@ -6,13 +6,13 @@ Generating optimal STLs for printing topographic surfaces.
 **NOTE:** This python project uses `pipenv` for dependencies, but a number of the useful libraries we require are simply bindings
 to shared libraries on the system. Therefore, something *more* than `pipenv install` may be required.
 
-Notably, the GDAL bindings are needed. On a Debian Linux system, run:
+Notably, the GDAL and CGAL bindings are needed. On a Debian Linux system, run:
 ```shell
-$ sudo apt-get install gdal-bin libgdal-dev
+$ sudo apt-get install gdal-bin libgdal-dev libcgal-dev
 ```
 
 ```shell
-$ sudo dnf install gdal gdal-devel 
+$ sudo dnf install gdal gdal-devel CGAL-devel
 ```
 
 To set up a development environment, make sure `python` (3+) and `pip` are installed, then [install `pipenv`](https://docs.python-guide.org/dev/virtualenvs/) and install dependencies:

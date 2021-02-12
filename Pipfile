@@ -13,6 +13,7 @@ scipy = "*"
 datetime = "*"
 pyomo = "*"
 matplotlib = "*"
+cgal = "*"
 
 [dev-packages]
 

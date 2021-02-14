@@ -29,3 +29,25 @@ Then, run the program with:
 ```shell
 $ pipenv run python terrain.py --config=<MY-CONFIG>
 ```
+
+## Containerized Development
+
+In order to make the installation easier, a Fedora container image can be built:
+
+```shell
+$ podman build --tag terrain:latest .
+```
+
+Then, you could mount in your input directory for the raw TIF data and run the tool:
+
+```shell
+$ mkdir "${HOME}/terrain"
+$ podman run \
+  --volume "${HOME}/terrain:/cache:z" \
+  --volume "${INPUT_DIR}:/input"      \
+  --volume "$( pwd ):/code"           \
+  -it terrain:latest                  \
+  pipenv run python /code/terrain.py --configuration "/input/config.json" --cache "/cache"
+```
+
+podman run --volume "${HOME}/terrain:/cache" --volume "${INPUT_DIR}:/input" --volume "$( pwd ):/code" -it terrain:latest pipenv run python /code/terrain.py --configuration "/input/config.json" --cache "/cache"

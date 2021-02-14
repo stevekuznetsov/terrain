@@ -12,6 +12,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="Process GeoTiff data into 3D models.")
     parser.add_argument("--configuration", help="Path to the configuration.", required=True)
+    parser.add_argument("--cache", help="Cache base directory.", default=str(Path.home().joinpath("terrain")))
     parser.add_argument("--loglevel", help="Logging verbosity level.", default="INFO")
     parser.add_argument("--visualize", help="Index of a parcel to visualize, as 'x,y'.")
     args = parser.parse_args()
@@ -21,7 +22,7 @@ def main():
     handler.setFormatter(logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
     logger.addHandler(handler)
     conf, hash = load(args.configuration)
-    cache_dir = Path.home().joinpath("terrain", hash)
+    cache_dir = Path(args.cache).joinpath(hash)
     logger.info("Initializing cache to " + str(cache_dir))
     cache_dir.mkdir(parents=True, exist_ok=True)
     conf["meta"] = {"cache": cache_dir, "logger": logger}

@@ -31,7 +31,7 @@ def subdivide(config, dataset, logger):
     filtered = filter_dataset(dataset, logger)
 
     logger.info("Determining parcel shape.")
-    parcel_shape = determineParcels(config["printer"], config["model"], filtered, config["raster"]["info"], logger)
+    parcel_shape = determine_parcels(config["printer"], config["model"], filtered, config["raster"]["info"], logger)
 
     logger.info("Building flanges at parcel edges.")
     with_flanges = build_flanges(config, filtered, parcel_shape, logger)
@@ -76,9 +76,9 @@ def filter_dataset(dataset, logger):
     return filtered
 
 
-def determineParcels(printer, model, raster, raster_info, logger):
+def determine_parcels(printer, model, raster, raster_info, logger):
     """
-    determineParcels chooses a reasonable tiling that attempts to minimize print time for the model as a whole.
+    determine_parcels chooses a reasonable tiling that attempts to minimize print time for the model as a whole.
     Overall print time is the sum of the print times of every build job; each build job prints in a time that's
     proportional to the height of the largest member on that build plate. In the most abstract sense, the 2D
     cutting stock problem applies here - we could choose some shape for every parcel and evaluate our choices by
@@ -283,24 +283,26 @@ class ParcelLoader:
 
     def __next__(self):
         index = self.index
+        if index == len(self.files):
+            raise StopIteration
         self.index += 1
         parcel_file = self.files[index]
-        parcel_indices = (int(i) for i in parcel_file.split("_"))
-        yield parcel_indices, self._parcelData(parcel_file)
+        parcel_indices = [int(i) for i in parcel_file[:-4].split("_")]
+        return parcel_indices, self._parcel_data(parcel_file)
 
-    def parcelAtIndex(self, index):
+    def parcel_at_index(self, index):
         """
-        parcelAtIndex returns the top and bottom surface data for a parcel with the specified index
+        parcel_at_index returns the top and bottom surface data for a parcel with the specified index
         :param index: a 2D tuple for the index of the parcel to retrieve
         :return: the top and bottom surface data
         """
         parcel_file = "{}_{}.tif".format(index[0], index[1])
-        return self._parcelData(parcel_file)
+        return self._parcel_data(parcel_file)
 
-    def _parcelData(self, parcel_file):
-        return self._dataFromFile("top", parcel_file), self._dataFromFile("bottom", parcel_file)
+    def _parcel_data(self, parcel_file):
+        return self._data_from_file("top", parcel_file), self._data_from_file("bottom", parcel_file)
 
-    def _dataFromFile(self, name, file):
+    def _data_from_file(self, name, file):
         self.logger.debug("Loading cached data...")
         cached_load_start = datetime.now()
         cached_dataset = gdal.Open(str(self.base_dir.joinpath(name, file)))

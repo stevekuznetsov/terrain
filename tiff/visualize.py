@@ -28,3 +28,17 @@ def parcel(data):
     ax2.plot_surface(x2, y2, z2, cmap=cmap, linewidth=0, antialiased=False, shade=False, facecolors=rgb2,
                      vmin=numpy.nanmin(2), vmax=numpy.nanmax(2))
     plt.show()
+
+
+def support(data):
+    """
+    Plot the support densities for a parcel.
+    :param data: support densities for a parcel, as a 3D array
+    """
+    density = numpy.ma.masked_where(data <= 1e-10, data)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    X, Y, Z = numpy.mgrid[:density.shape[0], :density.shape[1], :density.shape[2]]
+    img = ax.scatter(X, Y, Z, c=density.ravel(), cmap=plt.viridis())
+    fig.colorbar(img)
+    plt.show()

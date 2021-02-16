@@ -63,6 +63,19 @@ schema = {
                 # glue together. Optional, defaults to twice the surface thickness (for a total thickness at the
                 # flange of three times the surface thickness).
                 "flange_thickness_millimeters": {"type": "number"},
+                "support": {
+                    "type": "object",
+                    "properties": {
+                        # minimum_feature_radius_millimeters is the minimum feature which will be generated for support
+                        # structures, in millimeters (mm). This should be similar to the size of the smallest support
+                        # that common slicers would create. Optional, defaults to 2.0mm.
+                        "minimum_feature_radius_millimeters": {"type": "number"},
+                        # self_supporting_angle_degrees is the maximum angle at which the model will support itself, in
+                        # degrees. Tests should be done with a specific printer and resin to determine this value.
+                        # Optional, defaults to 45°.
+                        "self_supporting_angle_degrees": {"type": "number"},
+                    },
+                },
             },
             "required": ["surface_thickness_millimeters"],
         },
@@ -143,6 +156,12 @@ def validate(data):
         data["model"]["flange_thickness_millimeters"] = 2 * data["model"]["surface_thickness_millimeters"]
     if "z_scale" not in data["model"]:
         data["model"] = 1.0
+    if "support" not in data["model"]:
+        data["model"]["support"] = {}
+    if "minimum_feature_radius_millimeters" not in data["model"]["support"]:
+        data["model"]["support"]["minimum_feature_radius_millimeters"] = 2
+    if "self_supporting_angle_degrees" not in data["model"]["support"]:
+        data["model"]["support"]["self_supporting_angle_degrees"] = 45
 
 
 def load(path):

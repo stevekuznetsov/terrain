@@ -50,7 +50,7 @@ def main():
         index = index_from_flag(args.calculate_support)
         generate_support(conf, index, parcels, logger)
     supports = generate_supports(conf, parcels, logger)
-        
+
     if args.visualize_support is not None:
         logger.info("Visualizing supports for parcel {}".format(args.visualize_support))
         index = index_from_flag(args.visualize_support)
@@ -62,8 +62,10 @@ def main():
     # add more points on verticals around the perimeter so advancing front doesn't have to search far
     # https://github.com/CGAL/cgal-swig-bindings/blob/main/examples/python/Advancing_front_reconstruction_example.py
 
+
 def index_from_flag(flag):
     return [int(i) for i in flag.split(",")]
+
 
 def print_stats(parcels):
     headers = ["Index", "Shape", "Filled Area (%)", "Height (mm)"]

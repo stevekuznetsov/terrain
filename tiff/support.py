@@ -41,6 +41,7 @@ def generate_support(config, index, parcels, logger):
     logger.debug("Cropping NaNs took surface shape from {} to {}".format(surface.shape, cropped.shape))
     model = abstract_model(config["model"]["support"])
 
+    # TODO: the Z step should be the same as the X/Y resolution or our angles get all messy
     # slice the total Z height in this parcel into layers the height of our printer's Z resolution,
     # add one layer for the fixed variables modeling the build plate at the bottom
     layers = math.floor((numpy.nanmax(cropped) - numpy.nanmin(cropped)) /
@@ -156,6 +157,62 @@ def crop_nans(array):
     last_row = len(nan_rows) - nan_rows[::-1].argmin()
 
     return (first_column, first_row), array[first_row:last_row, first_column:last_column]
+
+
+def neighboring_set_for(index, printer_config, support_config):
+    """
+    neighboring_set_for returns the indices of points in the conical section of a sphere of the given radius
+    from the original point. The conical section is truncated from the sphere by using the self supporting angle.
+    :param index: the point for which we want the neighboring set
+    :param printer_config: configuration options for the printer
+    :param support_config: configuration options for supports
+    :return: the indices of the neighboring set
+    """
+    feature_radius_pixels = (support_config["minimum_feature_radius_millimeters"] / 1e3) / \
+                            (printer_config["xy_resolution_microns"] / 1e6)
+    self_supporting_ratio = math.tan(math.radians(support_config["self_supporting_angle_degrees"]))
+
+    neighbors = set()
+    (x, y, z) = index
+    for i in range(1, math.floor(feature_radius_pixels) + 1):
+        horizontal_span = i * self_supporting_ratio
+        # tan(pi/2) = .999999, not 1, so we need to allow j to be larger than our
+        # span as long as they are equivalent, e.g. when j ~ span
+        if numpy.isclose(round(horizontal_span), horizontal_span):
+            horizontal_span = round(horizontal_span)
+        for j in range(horizontal_span + 1):
+            for potential_neighbor in [(x - j, y, z - i), (x + j, y, z - i), (x, y - j, z - i), (x, y + j, z - i)]:
+                if euclidian_distance(potential_neighbor, index) <= feature_radius_pixels:
+                    neighbors.add(potential_neighbor)
+
+    return neighbors
+
+
+def euclidian_distance(a, b):
+    """
+    euclidian_distance calculates the Euclididan distance between points a and b
+    :param a: index of point a
+    :param b: index of point b
+    :return: euclidian distance between a and b
+    """
+    distance_squared = 0
+    for index in zip(a, b):
+        distance_squared += (index[0] - index[1]) ** 2
+    return math.sqrt(distance_squared)
+
+
+def weighting_factor(index, other, printer_config, support_config):
+    """
+    weighting_factor implements a distance-based weighting factor
+    :param index: the point from which we measure
+    :param other: the point for which we are weighting
+    :param printer_config: configuration options for the printer
+    :param support_config: configuration options for supports
+    :return: the weighting factor
+    """
+    feature_radius_pixels = (support_config["minimum_feature_radius_millimeters"] / 1e3) / \
+                            (printer_config["xy_resolution_microns"] / 1e6)
+    return 1 - euclidian_distance(index, other) / feature_radius_pixels
 
 
 class SupportLoader:

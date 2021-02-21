@@ -1,4 +1,5 @@
 from datetime import datetime
+import logging
 import pyomo.environ as pyo
 import numpy
 import math
@@ -39,9 +40,6 @@ def generate_support(config, index, parcels, logger):
     surface = parcel[1]  # we want to support the bottom
     crop_index, cropped = crop_nans(surface)
     logger.debug("Cropping NaNs took surface shape from {} to {}".format(surface.shape, cropped.shape))
-    feature_radius_pixels = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / \
-                            (config["printer"]["xy_resolution_microns"] / 1e6)
-    model = abstract_model(feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"])
 
     # TODO: the Z step should be the same as the X/Y resolution or our angles get all messy
     # slice the total Z height in this parcel into layers the height of our printer's Z resolution,
@@ -72,6 +70,12 @@ def generate_support(config, index, parcels, logger):
     )
 
     logger.debug("Instantiating abstract model...")
+    feature_radius_pixels = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / \
+                            (config["printer"]["xy_resolution_microns"] / 1e6)
+    model = abstract_model(
+        (m, n, l), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"],
+        logger
+    )
     instance_start = datetime.now()
     instance = model.create_instance(data=data)
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
@@ -101,29 +105,27 @@ def generate_support(config, index, parcels, logger):
     numpy.save(cached_data, output)
 
 
-def abstract_model(feature_radius_pixels, self_supporting_angle_degrees):
+def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, logger):
     """
     abstract_model creates an abstract model for the topology optimization problem
     :return: a PyOMO Abstract Model
     """
+    logger.debug("Constructing abstract model for {}px radius and {} degree self-supporting angle.".format(
+        feature_radius_pixels, self_supporting_angle_degrees
+    ))
     model = pyo.AbstractModel()
 
-    # our nodal mesh has some size (m,n,l)
-    model.m = pyo.Param(within=pyo.NonNegativeIntegers)
-    model.n = pyo.Param(within=pyo.NonNegativeIntegers)
-    model.l = pyo.Param(within=pyo.NonNegativeIntegers)
-
     # we index into our nodes through ranges (0..m), (0..n), and (0..l)
-    model.I = pyo.RangeSet(0, model.m)
-    model.J = pyo.RangeSet(0, model.n)
-    model.K = pyo.RangeSet(0, model.l)
+    model.I = pyo.RangeSet(0, shape[0])
+    model.J = pyo.RangeSet(0, shape[1])
+    model.K = pyo.RangeSet(0, shape[2])
 
     # our elements exist within the nodal mesh at intermediate positions
     # we index into our elements through ranges (0..m-1), (0..n-1), and (0..l-1)
     # where (0,0,0) in the element mesh is (0.5,0.5,0.5) in the nodal mesh
-    model.I_e = pyo.RangeSet(0, model.m - 1)
-    model.J_e = pyo.RangeSet(0, model.n - 1)
-    model.K_e = pyo.RangeSet(0, model.l - 1)
+    model.I_e = pyo.RangeSet(0, shape[0] - 1)
+    model.J_e = pyo.RangeSet(0, shape[1] - 1)
+    model.K_e = pyo.RangeSet(0, shape[2] - 1)
 
     # elemental density and nodal support densities are fractional
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
@@ -138,9 +140,7 @@ def abstract_model(feature_radius_pixels, self_supporting_angle_degrees):
         element_index = (i_e, j_e, k_e)
         elemental_supports = []
         for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                element_index,
-                feature_radius_pixels,
-                (m.m, m.n, m.l)
+                element_index, feature_radius_pixels, shape
         ):
             (x, y, z) = neighbor
             elemental_supports.append(factor * m.nodal_support_density[x, y, z])
@@ -162,7 +162,10 @@ def abstract_model(feature_radius_pixels, self_supporting_angle_degrees):
     def nodal_support_constraint(m, i, j, k):
         node_index = (i, j, k)
         neighbors = []
-        for neighbor in supporting_nodes_for_node(node_index, feature_radius_pixels, self_supporting_angle_degrees):
+        for neighbor in indices_within_bounds(
+                supporting_nodes_for_node(node_index, feature_radius_pixels, self_supporting_angle_degrees),
+                shape
+        ):
             (x, y, z) = neighbor
             neighbors.append(m.nodal_support_density[x, y, z])
         nodal_support = sum(neighbors) / len(neighbors)
@@ -230,6 +233,7 @@ def local_neighborhood_nodes_for_element(index, feature_radius_pixels):
     :param feature_radius_pixels: minimum feature radius, in pixels
     :return: the indices of the local neighborhood set
     """
+    # TODO: there might be an off-by-one error in here
     neighbors = set()
     x, y, z = elemental_index_to_nodal_index(index)
     # allow our first index to vary the entire range

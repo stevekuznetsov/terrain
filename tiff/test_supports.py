@@ -1,34 +1,25 @@
-import logging
 import unittest
 import math
 from tiff import support
 
 
 class TestSupports(unittest.TestCase):
-    def test_euclidian_distance(self):
-        self.assertEqual(support.euclidian_distance((0, 0, 0), (1, 1, 1)), math.sqrt(3))
-        self.assertEqual(support.euclidian_distance((1, 1, 1), (0, 0, 0)), math.sqrt(3))
-        self.assertEqual(support.euclidian_distance((1, 1, 1), (5, 12, 7)), math.sqrt(173))
+    def test_euclidean_distance(self):
+        self.assertEqual(support.euclidean_distance((0, 0, 0), (1, 1, 1)), math.sqrt(3))
+        self.assertEqual(support.euclidean_distance((1, 1, 1), (0, 0, 0)), math.sqrt(3))
+        self.assertEqual(support.euclidean_distance((1, 1, 1), (5, 12, 7)), math.sqrt(173))
 
-    def test_neighboring_set_for(self):
-        self.assertEqual(support.neighboring_set_for(
+    def test_supporting_nodes_for_node(self):
+        self.assertEqual(support.supporting_nodes_for_node(
             (10, 10, 10),
-            {"xy_resolution_microns": 1000},
-            {
-                "minimum_feature_radius_millimeters": 1,
-                "self_supporting_angle_degrees": 45,
-            }
+            1, 45
         ), {
             (10, 10, 9),
         })
 
-        self.assertEqual(support.neighboring_set_for(
+        self.assertEqual(support.supporting_nodes_for_node(
             (10, 10, 10),
-            {"xy_resolution_microns": 1000},
-            {
-                "minimum_feature_radius_millimeters": 3,
-                "self_supporting_angle_degrees": 45,
-            }
+            3, 45
         ), {
             (10, 9, 9),
             (9, 10, 9), (10, 10, 9), (11, 10, 9),
@@ -42,6 +33,60 @@ class TestSupports(unittest.TestCase):
 
             (10, 10, 7),
         })
+
+    def test_local_neighborhood_nodes_for_element(self):
+        self.assertEqual(support.local_neighborhood_nodes_for_element(
+            (0, 0, 0),
+            1,
+        ), {
+            (0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (0, 1, 1), (1, 1, 1), (1, 0, 1), (1, 1, 0),
+        })
+
+        self.assertEqual(support.local_neighborhood_nodes_for_element(
+            (10, 10, 10), 2,
+        ), {
+            (10, 10, 9), (10, 11, 9),
+            (11, 10, 9), (11, 11, 9),
+
+            (9, 10, 10), (9, 11, 10),
+            (10, 9, 10), (10, 10, 10), (10, 11, 10), (10, 12, 10),
+            (11, 9, 10), (11, 10, 10), (11, 11, 10), (11, 12, 10),
+            (12, 10, 10), (12, 11, 10),
+
+            (9, 10, 11), (9, 11, 11),
+            (10, 9, 11), (10, 10, 11), (10, 11, 11), (10, 12, 11),
+            (11, 9, 11), (11, 10, 11), (11, 11, 11), (11, 12, 11),
+            (12, 11, 11), (12, 10, 11),
+
+            (10, 10, 12), (10, 11, 12),
+            (11, 10, 12), (11, 11, 12),
+        })
+
+    def test_indices_within_bounds(self):
+        self.assertEqual(support.indices_within_bounds(
+            {(-1, 0, 1), (0, 0, 0), (0, 10, 1), (1, 1, 1)},
+            (2, 2, 2)
+        ), {
+            (0, 0, 0), (1, 1, 1),
+        })
+
+    def test_elemental_index_to_nodal_index(self):
+        self.assertEqual(support.elemental_index_to_nodal_index((0, 0, 0)), (0.5, 0.5, 0.5))
+
+    def test_weighted_filtered_local_neighborhood_nodes_for_element(self):
+        dist = 1-math.sqrt(3/4)/2
+        self.assertCountEqual(support.weighted_filtered_local_neighborhood_nodes_for_element(
+            (0, 0, 0), 2, (2, 2, 2)
+        ), [
+            ((0, 0, 0), dist),
+            ((1, 0, 0), dist),
+            ((0, 1, 0), dist),
+            ((0, 0, 1), dist),
+            ((0, 1, 1), dist),
+            ((1, 1, 1), dist),
+            ((1, 0, 1), dist),
+            ((1, 1, 0), dist),
+        ])
 
 
 if __name__ == '__main__':

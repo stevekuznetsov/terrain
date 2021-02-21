@@ -39,7 +39,9 @@ def generate_support(config, index, parcels, logger):
     surface = parcel[1]  # we want to support the bottom
     crop_index, cropped = crop_nans(surface)
     logger.debug("Cropping NaNs took surface shape from {} to {}".format(surface.shape, cropped.shape))
-    model = abstract_model(config["model"]["support"])
+    feature_radius_pixels = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / \
+                            (config["printer"]["xy_resolution_microns"] / 1e6)
+    model = abstract_model(feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"])
 
     # TODO: the Z step should be the same as the X/Y resolution or our angles get all messy
     # slice the total Z height in this parcel into layers the height of our printer's Z resolution,
@@ -51,6 +53,8 @@ def generate_support(config, index, parcels, logger):
         "m": {None: m},
         "n": {None: n},
         "l": {None: l},
+        "heaviside_regularization_parameter": {None: 1.0},
+        "maximum_support_magnitude": {None: 1.0},
     }}
     logger.debug(
         "Full abstract model with shape ({},{},{}) will contain up to {} boolean variables.".format(
@@ -62,7 +66,7 @@ def generate_support(config, index, parcels, logger):
                                       float(config["printer"]["z_resolution_microns"] / float(1e6)) + 1)
     indices = numpy.where(numpy.isnan(regularized_surface), 0, regularized_surface)
     logger.debug(
-        "After fixing surface pixels, those above them and NaN regions, {} boolean variables remain.".format(
+        "After fixing surface pixels, those above them and NaN regions, {} variables remain.".format(
             numpy.ndarray.sum(indices)
         )
     )
@@ -75,10 +79,10 @@ def generate_support(config, index, parcels, logger):
     logger.debug("Fixing variables...")
     for M in range(m):
         for N in range(n):
-            instance.x[M, N, 0].fix(1)  # build plate
-            instance.x[M, N, indices[M, N]].fix(1)  # surface
+            instance.nodal_support_density[M, N, 0].fix(1)  # build plate
+            instance.elemental_density[M, N, indices[M, N]].fix(1)  # surface
             for L in range(int(indices[M, N]) + 1, l):
-                instance.x[M, N, L].fix(0)  # above the surface
+                instance.elemental_density[M, N, L].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
     opt = pyo.SolverFactory('cbc')
@@ -97,46 +101,84 @@ def generate_support(config, index, parcels, logger):
     numpy.save(cached_data, output)
 
 
-def abstract_model(config):
+def abstract_model(feature_radius_pixels, self_supporting_angle_degrees):
     """
-    abstract_model creates a simple abstract model for the topology optimization problem
+    abstract_model creates an abstract model for the topology optimization problem
     :return: a PyOMO Abstract Model
     """
     model = pyo.AbstractModel()
 
-    # our model has some size (m,n,l)
+    # our nodal mesh has some size (m,n,l)
     model.m = pyo.Param(within=pyo.NonNegativeIntegers)
     model.n = pyo.Param(within=pyo.NonNegativeIntegers)
     model.l = pyo.Param(within=pyo.NonNegativeIntegers)
 
-    # we index into our data through ranges (0..m), (0..n), and (0..l)
+    # we index into our nodes through ranges (0..m), (0..n), and (0..l)
     model.I = pyo.RangeSet(0, model.m)
     model.J = pyo.RangeSet(0, model.n)
     model.K = pyo.RangeSet(0, model.l)
 
-    # whether or not we place material at (x,y,z) is a fractional variable
-    model.x = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
+    # our elements exist within the nodal mesh at intermediate positions
+    # we index into our elements through ranges (0..m-1), (0..n-1), and (0..l-1)
+    # where (0,0,0) in the element mesh is (0.5,0.5,0.5) in the nodal mesh
+    model.I_e = pyo.RangeSet(0, model.m - 1)
+    model.J_e = pyo.RangeSet(0, model.n - 1)
+    model.K_e = pyo.RangeSet(0, model.l - 1)
 
-    # our simplistic constraint is that a pixel may be filled only if it's supported by the pixel
-    # directly underneath it or any of the ones adjacent to it, at a 45 degree angle
-    def constraint(m, i, j, k):
-        return m.x[i, j, k] <= \
-               m.x[i, j, k - 1] + \
-               m.x[i - 1, j, k - 1] + \
-               m.x[i + 1, j, k - 1] + \
-               m.x[i, j - 1, k - 1] + \
-               m.x[i, j + 1, k - 1]
+    # elemental density and nodal support densities are fractional
+    model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
+    model.nodal_support_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
-    # we don't constrain the bottom (build plate) or sides for indexing simplicity
-    model.XConstraint = pyo.Constraint(
-        pyo.RangeSet(1, model.m - 1),
-        pyo.RangeSet(1, model.n - 1),
-        pyo.RangeSet(1, model.l - 1),
-        rule=constraint
+    model.heaviside_regularization_parameter = pyo.Param(within=pyo.PositiveReals)
+    model.maximum_support_magnitude = pyo.Param(within=pyo.PositiveReals)
+
+    # the elemental density is constrained by the support densities in the nearby nodes, to ensure
+    # that the solver creates homogeneous solids without voids
+    def elemental_density_constraint(m, i_e, j_e, k_e):
+        element_index = (i_e, j_e, k_e)
+        elemental_supports = []
+        for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
+                element_index,
+                feature_radius_pixels,
+                (m.m, m.n, m.l)
+        ):
+            (x, y, z) = neighbor
+            elemental_supports.append(factor * m.nodal_support_density[x, y, z])
+        elemental_support = sum(elemental_supports)
+        return m.elemental_density[i_e, j_e, k_e] == 1 - \
+               pyo.exp(-m.heaviside_regularization_parameter * elemental_support) + \
+               (elemental_support / m.maximum_support_magnitude) * \
+               pyo.exp(-m.heaviside_regularization_parameter * m.maximum_support_magnitude)
+
+    model.elemental_density_constraint = pyo.Constraint(
+        model.I_e, model.J_e, model.K_e,
+        rule=elemental_density_constraint
+    )
+
+    threshold_heaviside_value = (180 / (2 * math.pi * (90 - self_supporting_angle_degrees))) / feature_radius_pixels
+
+    # the nodal support density is at most the support densities from the set of nodes that confer
+    # support to the node in question
+    def nodal_support_constraint(m, i, j, k):
+        node_index = (i, j, k)
+        neighbors = []
+        for neighbor in supporting_nodes_for_node(node_index, feature_radius_pixels, self_supporting_angle_degrees):
+            (x, y, z) = neighbor
+            neighbors.append(m.nodal_support_density[x, y, z])
+        nodal_support = sum(neighbors) / len(neighbors)
+        heaviside_constant = pyo.tanh(m.heaviside_regularization_parameter * threshold_heaviside_value)
+        numerator = pyo.tanh(m.heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
+        denominator = pyo.tanh(m.heaviside_regularization_parameter * (1 - threshold_heaviside_value))
+        return m.nodal_support_density[i, j, k] <= \
+               (heaviside_constant + numerator) / (heaviside_constant + denominator)
+
+    model.nodal_support_constraint = pyo.Constraint(
+        model.I, model.J, model.K,
+        rule=nodal_support_constraint
     )
 
     # we want to minimize the total amount of material placed
-    model.OBJ = pyo.Objective(rule=lambda m: pyo.summation(m.x), sense=pyo.minimize)
+    model.OBJ = pyo.Objective(rule=lambda m: pyo.summation(m.elemental_density), sense=pyo.minimize)
     return model
 
 
@@ -159,18 +201,58 @@ def crop_nans(array):
     return (first_column, first_row), array[first_row:last_row, first_column:last_column]
 
 
-def neighboring_set_for(index, printer_config, support_config):
+def weighted_filtered_local_neighborhood_nodes_for_element(index, feature_radius_pixels, bounds):
     """
-    neighboring_set_for returns the indices of points in the conical section of a sphere of the given radius
-    from the original point. The conical section is truncated from the sphere by using the self supporting angle.
-    :param index: the point for which we want the neighboring set
-    :param printer_config: configuration options for the printer
-    :param support_config: configuration options for supports
-    :return: the indices of the neighboring set
+    weighted_filtered_local_neighborhood_nodes_for_element returns the weighted, filtered neighboring set of nodes
+    for an element for use in the elemental density constraint
+    :param index: the element for which we want the local neighborhood
+    :param feature_radius_pixels: minimum feature radius, in pixels
+    :param bounds: upper bounds for each axis, implicit minimum at 0
+    :return: the indices of the local neighborhood set within bounds with their weights
     """
-    feature_radius_pixels = (support_config["minimum_feature_radius_millimeters"] / 1e3) / \
-                            (printer_config["xy_resolution_microns"] / 1e6)
-    self_supporting_ratio = math.tan(math.radians(support_config["self_supporting_angle_degrees"]))
+    neighbors = indices_within_bounds(
+        local_neighborhood_nodes_for_element(index, feature_radius_pixels),
+        bounds
+    )
+    weighted_neighbors = []
+    for neighbor in neighbors:
+        factor = weighting_factor(elemental_index_to_nodal_index(index), neighbor, feature_radius_pixels)
+        weighted_neighbors.append((neighbor, factor))
+    return weighted_neighbors
+
+
+def local_neighborhood_nodes_for_element(index, feature_radius_pixels):
+    """
+    local_neighborhood_nodes_for_element returns the indices of nodes which are in the local neighborhood of an
+    element. Note that the nodes and elements in a mesh have distinct coordinates: elements exist in the centroids
+    of cubes formed by the mesh of nodes.
+    :param index: the element for which we want the local neighborhood
+    :param feature_radius_pixels: minimum feature radius, in pixels
+    :return: the indices of the local neighborhood set
+    """
+    neighbors = set()
+    x, y, z = elemental_index_to_nodal_index(index)
+    # allow our first index to vary the entire range
+    for i in range(math.ceil(x - feature_radius_pixels), math.floor(x + feature_radius_pixels) + 1):
+        # how much variability is left for the second index given the first?
+        leftover_y_radius = math.sqrt(feature_radius_pixels ** 2 - (x - i) ** 2)
+        for j in range(math.ceil(y - leftover_y_radius), math.floor(y + leftover_y_radius) + 1):
+            leftover_z_radius = math.sqrt(feature_radius_pixels ** 2 - (x - i) ** 2 - (y - j) ** 2)
+            for k in range(math.ceil(z - leftover_z_radius), math.floor(z + leftover_z_radius) + 1):
+                neighbors.add((i, j, k))
+    return neighbors
+
+
+def supporting_nodes_for_node(index, feature_radius_pixels, self_supporting_angle_degrees):
+    """
+    supporting_nodes_for_node returns the indices of nodes in the conical section of a sphere of the given radius
+    from the original node. The conical section is truncated from the sphere by using the self supporting angle.
+    :param index: the node for which we want the supporting set
+    :param feature_radius_pixels: minimum feature radius, in pixels
+    :param self_supporting_angle_degrees: minimum self supporting angle, in degrees
+    :return: the indices of the supporting set
+    """
+    self_supporting_ratio = math.tan(math.radians(self_supporting_angle_degrees))
 
     neighbors = set()
     (x, y, z) = index
@@ -182,18 +264,18 @@ def neighboring_set_for(index, printer_config, support_config):
             horizontal_span = round(horizontal_span)
         for j in range(horizontal_span + 1):
             for potential_neighbor in [(x - j, y, z - i), (x + j, y, z - i), (x, y - j, z - i), (x, y + j, z - i)]:
-                if euclidian_distance(potential_neighbor, index) <= feature_radius_pixels:
+                if euclidean_distance(potential_neighbor, index) <= feature_radius_pixels:
                     neighbors.add(potential_neighbor)
 
     return neighbors
 
 
-def euclidian_distance(a, b):
+def euclidean_distance(a, b):
     """
-    euclidian_distance calculates the Euclididan distance between points a and b
+    euclidean_distance calculates the Euclidean distance between points a and b
     :param a: index of point a
     :param b: index of point b
-    :return: euclidian distance between a and b
+    :return: Euclidean distance between a and b
     """
     distance_squared = 0
     for index in zip(a, b):
@@ -201,18 +283,43 @@ def euclidian_distance(a, b):
     return math.sqrt(distance_squared)
 
 
-def weighting_factor(index, other, printer_config, support_config):
+def weighting_factor(index, other, feature_radius_pixels):
     """
     weighting_factor implements a distance-based weighting factor
     :param index: the point from which we measure
     :param other: the point for which we are weighting
-    :param printer_config: configuration options for the printer
-    :param support_config: configuration options for supports
+    :param feature_radius_pixels: minimum feature radius, in pixels
     :return: the weighting factor
     """
-    feature_radius_pixels = (support_config["minimum_feature_radius_millimeters"] / 1e3) / \
-                            (printer_config["xy_resolution_microns"] / 1e6)
-    return 1 - euclidian_distance(index, other) / feature_radius_pixels
+    return 1 - euclidean_distance(index, other) / feature_radius_pixels
+
+
+def indices_within_bounds(indices, bounds):
+    """
+    indices_within_bounds filters a set of indices to those that are within the bounding box
+    :param indices: a set of indices
+    :param bounds: upper bounds for each axis, implicit minimum at 0
+    :return: filtered indices within bounds
+    """
+    filtered = set()
+    for index in indices:
+        invalid = False
+        for axis in zip(index, bounds):
+            if axis[0] < 0 or axis[0] >= axis[1]:
+                invalid = True
+        if not invalid:
+            filtered.add(index)
+    return filtered
+
+
+def elemental_index_to_nodal_index(index):
+    """
+    elemental_index_to_nodal_index converts an elemental index to a nodal one -
+    elements exist in centroids formed by the nodal mesh
+    :param index: elemental index
+    :return: nodal index
+    """
+    return tuple(i + 0.5 for i in index)
 
 
 class SupportLoader:

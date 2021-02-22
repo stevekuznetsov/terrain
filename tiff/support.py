@@ -62,8 +62,8 @@ def generate_support(config, index, parcels, logger):
 
     # Slice the total Z height in this parcel into layers as high as our pixels are wide, or our angle calculations
     # get all messy. Add one layer for the fixed variables modeling the build plate at the bottom.
-    layers = math.floor((numpy.nanmax(scaled) - numpy.nanmin(scaled)) / pixel_size) + 1
-    m, n, l = scaled.shape[0], scaled.shape[1], layers
+    layers = math.floor((numpy.nanmax(scaled) - numpy.nanmin(scaled)) / pixel_size) + 2
+    i, j, k = scaled.shape[0], scaled.shape[1], layers
     logger.debug(
         "Full abstract model with shape ({},{},{}) will contain up to {} variables.".format(
             scaled.shape[0], scaled.shape[1], layers, scaled.shape[0] * scaled.shape[1] * layers
@@ -80,7 +80,9 @@ def generate_support(config, index, parcels, logger):
 
     logger.debug("Instantiating abstract model...")
     feature_radius_pixels = 2.0
-    model = abstract_model((m, n, l), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"], logger)
+    model = abstract_model(
+        (i, j, k), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"], logger
+    )
     data = {None: {
         "heaviside_regularization_parameter": {None: 1.0},
         "maximum_support_magnitude": {None: 1.0},
@@ -90,25 +92,27 @@ def generate_support(config, index, parcels, logger):
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
     fixing_start = datetime.now()
     logger.debug("Fixing variables...")
-    for M in range(m):
-        for N in range(n):
-            instance.nodal_support_density[M, N, 0].fix(1)  # build plate
-            instance.elemental_density[M, N, indices[M, N]].fix(1)  # surface
-            for L in range(int(indices[M, N]) + 1, l):
-                instance.elemental_density[M, N, L].fix(0)  # above the surface
+    for I in range(i + 1):
+        for J in range(j + 1):
+            instance.nodal_support_density[I, J, 0].fix(1)  # build plate
+    for I in range(i):
+        for J in range(j):
+            instance.elemental_density[I, J, indices[I, J]].fix(1)  # surface
+            for K in range(int(indices[I, J]) + 1, k):
+                instance.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
-    opt = pyo.SolverFactory('cbc')
+    opt = pyo.SolverFactory('ipopt')
     solving_start = datetime.now()
     logger.debug("Solving for optimal support...")
-    opt.solve(instance)
+    opt.solve(instance, tee=True)
     logger.debug("Solving for optimal support took {}.".format(datetime.now() - solving_start))
-    output = numpy.empty((m, n, l - 1))
+    output = numpy.empty((i, j, k - 1))
     output[:] = numpy.nan
-    for M in range(m):
-        for N in range(n):
-            for L in range(1, l):
-                output[M, N, L - 1] = instance.x[M, N, L].value
+    for I in range(i):
+        for J in range(j):
+            for K in range(1, k):  # ignore the build plate
+                output[I, J, K - 1] = instance.elemental_density[I, J, K].value
 
     # TODO: uncrop to size of original data
     numpy.save(cached_data, output)
@@ -117,6 +121,10 @@ def generate_support(config, index, parcels, logger):
 def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, logger):
     """
     abstract_model creates an abstract model for the topology optimization problem
+    :param shape: shape of element mesh
+    :param feature_radius_pixels: minimum feature radius in pixels
+    :param self_supporting_angle_degrees: self supporting angle in degrees
+    :param logger: logger
     :return: a PyOMO Abstract Model
     """
     logger.debug(
@@ -127,17 +135,21 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
     )
     model = pyo.AbstractModel()
 
-    # we index into our nodes through ranges (0..m), (0..n), and (0..l)
-    model.I = pyo.RangeSet(0, shape[0])
-    model.J = pyo.RangeSet(0, shape[1])
-    model.K = pyo.RangeSet(0, shape[2])
+    # Our elements exist within the nodal mesh at intermediate positions between
+    # nodes. We index into our elements through ranges [0..i), [0..j), and [0..k)
+    # where (0,0,0) in the element mesh is (0.5,0.5,0.5) in the nodal mesh. Note
+    # that a RangeSet is inclusive.
+    (I_e, J_e, K_e) = shape
+    model.I_e = pyo.RangeSet(0, I_e - 1)
+    model.J_e = pyo.RangeSet(0, J_e - 1)
+    model.K_e = pyo.RangeSet(0, K_e - 1)
 
-    # our elements exist within the nodal mesh at intermediate positions
-    # we index into our elements through ranges (0..m-1), (0..n-1), and (0..l-1)
-    # where (0,0,0) in the element mesh is (0.5,0.5,0.5) in the nodal mesh
-    model.I_e = pyo.RangeSet(0, shape[0] - 1)
-    model.J_e = pyo.RangeSet(0, shape[1] - 1)
-    model.K_e = pyo.RangeSet(0, shape[2] - 1)
+    # We index into our nodes through ranges [0..i], [0..j], and [0..k] as we need
+    # to handle the outer nodes around the last elemental bounds.
+    (I, J, K) = (I_e + 1, J_e + 1, K_e + 1)
+    model.I = pyo.RangeSet(0, I - 1)
+    model.J = pyo.RangeSet(0, J - 1)
+    model.K = pyo.RangeSet(0, K - 1)
 
     # elemental density and nodal support densities are fractional
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
@@ -152,7 +164,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
         element_index = (i_e, j_e, k_e)
         elemental_supports = []
         for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                element_index, feature_radius_pixels, shape
+                element_index, feature_radius_pixels, (I_e, J_e, K_e)
         ):
             (x, y, z) = neighbor
             elemental_supports.append(factor * m.nodal_support_density[x, y, z])
@@ -163,7 +175,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
                pyo.exp(-m.heaviside_regularization_parameter * m.maximum_support_magnitude)
 
     model.elemental_density_constraint = pyo.Constraint(
-        model.I_e, model.J_e, pyo.RangeSet(1, shape[2]-1),  # ignore z=0 where the build plate is
+        model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
         rule=elemental_density_constraint
     )
 
@@ -176,7 +188,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
         neighbors = []
         for neighbor in indices_within_bounds(
                 supporting_nodes_for_node(node_index, feature_radius_pixels, self_supporting_angle_degrees),
-                shape
+                (I, J, K)
         ):
             (x, y, z) = neighbor
             neighbors.append(m.nodal_support_density[x, y, z])
@@ -188,7 +200,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
                (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
     model.nodal_support_constraint = pyo.Constraint(
-        model.I, model.J, pyo.RangeSet(1, shape[2]),  # ignore z=0 where the build plate is
+        model.I, model.J, pyo.RangeSet(1, K - 1),  # ignore z=0 where the build plate is
         rule=nodal_support_constraint
     )
 

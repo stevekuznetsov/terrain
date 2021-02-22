@@ -68,7 +68,7 @@ schema = {
                     "properties": {
                         # minimum_feature_radius_millimeters is the minimum feature which will be generated for support
                         # structures, in millimeters (mm). This should be similar to the size of the smallest support
-                        # that common slicers would create. Optional, defaults to 2.0mm.
+                        # that common slicers would create. Optional, defaults to 0.6mm.
                         "minimum_feature_radius_millimeters": {"type": "number"},
                         # self_supporting_angle_degrees is the maximum angle at which the model will support itself, in
                         # degrees. Tests should be done with a specific printer and resin to determine this value.
@@ -159,7 +159,7 @@ def validate(data):
     if "support" not in data["model"]:
         data["model"]["support"] = {}
     if "minimum_feature_radius_millimeters" not in data["model"]["support"]:
-        data["model"]["support"]["minimum_feature_radius_millimeters"] = 2
+        data["model"]["support"]["minimum_feature_radius_millimeters"] = 0.6
     if "self_supporting_angle_degrees" not in data["model"]["support"]:
         data["model"]["support"]["self_supporting_angle_degrees"] = 45
 

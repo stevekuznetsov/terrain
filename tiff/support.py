@@ -1,9 +1,9 @@
 from datetime import datetime
-import logging
 import pyomo.environ as pyo
 import numpy
 import math
 import os
+from scipy import ndimage
 
 # __CACHE_SUPPORT_DIR__ is the root for the files we will store support arrays in
 __CACHE_SUPPORT_DIR__ = "supports"
@@ -41,41 +41,50 @@ def generate_support(config, index, parcels, logger):
     crop_index, cropped = crop_nans(surface)
     logger.debug("Cropping NaNs took surface shape from {} to {}".format(surface.shape, cropped.shape))
 
-    # TODO: the Z step should be the same as the X/Y resolution or our angles get all messy
-    # slice the total Z height in this parcel into layers the height of our printer's Z resolution,
-    # add one layer for the fixed variables modeling the build plate at the bottom
-    layers = math.floor((numpy.nanmax(cropped) - numpy.nanmin(cropped)) /
-                        float(config["printer"]["z_resolution_microns"] / float(1e6))) + 1
-    m, n, l = cropped.shape[0], cropped.shape[1], layers
-    data = {None: {
-        "m": {None: m},
-        "n": {None: n},
-        "l": {None: l},
-        "heaviside_regularization_parameter": {None: 1.0},
-        "maximum_support_magnitude": {None: 1.0},
-    }}
+    # Given the minimum feature size the user has requested, we can down-sample the original dataset to reduce
+    # the complexity of the optimization problem to solve. There's no real loss in fidelity if we down-sample
+    # here, we don't need a very smooth shape coming out of this algorithm to ensure a reasonable 3D mesh later.
+    # Down-sampling here also is critical to have any reasonable guarantee that the optimization problem can be
+    # solved in human timescales (minutes) instead of geological ones using the native resolution. Allow 30 pixels
+    # per minimum feature diameter: inter-pixel distance is the 1/10th the minimum feature radius.
+    pixel_size = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / 10
+    scaling_factor = (config["printer"]["xy_resolution_microns"] / 1e6) / pixel_size
+    # Any interpolations on data-sets with NaN values are prone to extrapolate the NaNs across the whole data-set.
+    # Setting these values to some non-NaN value will result in the surface being "pulled" there at the edges when
+    # we interpolate, but it's a simple approach.
+    filled = numpy.where(numpy.isnan(cropped), numpy.nanmean(cropped), cropped)
+    scaled = ndimage.zoom(filled, zoom=scaling_factor)
     logger.debug(
-        "Full abstract model with shape ({},{},{}) will contain up to {} boolean variables.".format(
-            cropped.shape[0], cropped.shape[1], layers, cropped.shape[0] * cropped.shape[1] * layers
+        "Scaling surface to a pixel size of {}mm (using a scaling factor of 1:{:.2f}) results in a surface shape of {}.".format(
+            config["model"]["support"]["minimum_feature_radius_millimeters"], 1 / scaling_factor, scaled.shape
         )
     )
 
-    regularized_surface = numpy.floor((cropped - numpy.nanmin(cropped)) / \
-                                      float(config["printer"]["z_resolution_microns"] / float(1e6)) + 1)
+    # Slice the total Z height in this parcel into layers as high as our pixels are wide, or our angle calculations
+    # get all messy. Add one layer for the fixed variables modeling the build plate at the bottom.
+    layers = math.floor((numpy.nanmax(scaled) - numpy.nanmin(scaled)) / pixel_size) + 1
+    m, n, l = scaled.shape[0], scaled.shape[1], layers
+    logger.debug(
+        "Full abstract model with shape ({},{},{}) will contain up to {} variables.".format(
+            scaled.shape[0], scaled.shape[1], layers, scaled.shape[0] * scaled.shape[1] * layers
+        )
+    )
+
+    regularized_surface = numpy.floor((scaled - numpy.nanmin(scaled)) / pixel_size) + 1
     indices = numpy.where(numpy.isnan(regularized_surface), 0, regularized_surface)
     logger.debug(
         "After fixing surface pixels, those above them and NaN regions, {} variables remain.".format(
-            numpy.ndarray.sum(indices)
+            int(numpy.ndarray.sum(indices))
         )
     )
 
     logger.debug("Instantiating abstract model...")
-    feature_radius_pixels = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / \
-                            (config["printer"]["xy_resolution_microns"] / 1e6)
-    model = abstract_model(
-        (m, n, l), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"],
-        logger
-    )
+    feature_radius_pixels = 2.0
+    model = abstract_model((m, n, l), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"], logger)
+    data = {None: {
+        "heaviside_regularization_parameter": {None: 1.0},
+        "maximum_support_magnitude": {None: 1.0},
+    }}
     instance_start = datetime.now()
     instance = model.create_instance(data=data)
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
@@ -110,9 +119,12 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
     abstract_model creates an abstract model for the topology optimization problem
     :return: a PyOMO Abstract Model
     """
-    logger.debug("Constructing abstract model for {}px radius and {} degree self-supporting angle.".format(
-        feature_radius_pixels, self_supporting_angle_degrees
-    ))
+    logger.debug(
+        "Building an abstract model of shape {} with a minimum feature radius of {}px and "
+        "self-supporting angle of {} degrees.".format(
+            shape, feature_radius_pixels, self_supporting_angle_degrees
+        )
+    )
     model = pyo.AbstractModel()
 
     # we index into our nodes through ranges (0..m), (0..n), and (0..l)
@@ -151,7 +163,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
                pyo.exp(-m.heaviside_regularization_parameter * m.maximum_support_magnitude)
 
     model.elemental_density_constraint = pyo.Constraint(
-        model.I_e, model.J_e, model.K_e,
+        model.I_e, model.J_e, pyo.RangeSet(1, shape[2]-1),  # ignore z=0 where the build plate is
         rule=elemental_density_constraint
     )
 
@@ -176,7 +188,7 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
                (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
     model.nodal_support_constraint = pyo.Constraint(
-        model.I, model.J, model.K,
+        model.I, model.J, pyo.RangeSet(1, shape[2]),  # ignore z=0 where the build plate is
         rule=nodal_support_constraint
     )
 

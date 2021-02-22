@@ -8,11 +8,11 @@ to shared libraries on the system. Therefore, something *more* than `pipenv inst
 
 Notably, the GDAL and CGAL bindings are needed. On a Debian Linux system, run:
 ```shell
-$ sudo apt-get install gdal-bin libgdal-dev libcgal-dev
+$ sudo apt-get install python3-dev gdal-bin libgdal-dev libcgal-dev
 ```
 
 ```shell
-$ sudo dnf install gdal gdal-devel CGAL-devel
+$ sudo dnf install python3-devel gdal gdal-devel CGAL-devel
 ```
 
 To set up a development environment, make sure `python` (3+) and `pip` are installed, then [install `pipenv`](https://docs.python-guide.org/dev/virtualenvs/) and install dependencies:

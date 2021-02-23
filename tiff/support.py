@@ -369,9 +369,8 @@ def node_below_adjacent_elements(node, surface):
     (i, j, k) = node
     maximum = 0
     for location in [(i - 1, j - 1), (i, j - 1), (i - 1, j), (i, j)]:
-        if not (0 <= i < surface.shape[0] and 0 <= j < surface.shape[1]):
-            continue
-        maximum = max(maximum, surface[location])
+        if 0 <= i < surface.shape[0] and 0 <= j < surface.shape[1]:
+            maximum = max(maximum, surface[location])
     return k <= maximum + 1
 
 

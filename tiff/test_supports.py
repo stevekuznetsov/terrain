@@ -64,7 +64,7 @@ class TestSupports(unittest.TestCase):
         })
 
     def test_indices_within_bounds(self):
-        self.assertEqual(support.indices_within_bounds(
+        self.assertEqual(support.nodes_within_bounds(
             {(-1, 0, 1), (0, 0, 0), (0, 10, 1), (1, 1, 1)},
             (2, 2, 2)
         ), {

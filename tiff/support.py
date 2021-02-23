@@ -185,8 +185,8 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         if not node_below_adjacent_elements(node_index, surface):
             return pyo.Constraint.Skip
         neighbors = []
-        for neighbor in indices_beneath_surface(
-                indices_within_bounds(
+        for neighbor in nodes_beneath_surface(
+                nodes_within_bounds(
                     supporting_nodes_for_node(node_index, feature_radius_pixels * 1.5, self_supporting_angle_degrees),
                     (I, J, K)
                 ), surface):
@@ -238,8 +238,8 @@ def weighted_filtered_local_neighborhood_nodes_for_element(index, feature_radius
     :param surface: surface that bounds indices in the mesh
     :return: the indices of the local neighborhood set within bounds with their weights
     """
-    neighbors = indices_beneath_surface(
-        indices_within_bounds(
+    neighbors = nodes_beneath_surface(
+        nodes_within_bounds(
             local_neighborhood_nodes_for_element(index, feature_radius_pixels),
             bounds
         ),
@@ -326,9 +326,9 @@ def weighting_factor(index, other, feature_radius_pixels):
     return 1 - euclidean_distance(index, other) / feature_radius_pixels
 
 
-def indices_within_bounds(indices, bounds):
+def nodes_within_bounds(indices, bounds):
     """
-    indices_within_bounds filters a set of indices to those that are within the bounding box
+    nodes_within_bounds filters a set of indices to those that are within the bounding box
     :param indices: a set of indices
     :param bounds: upper bounds for each axis, implicit minimum at 0
     :return: filtered indices within bounds
@@ -344,9 +344,9 @@ def indices_within_bounds(indices, bounds):
     return filtered
 
 
-def indices_beneath_surface(indices, surface):
+def nodes_beneath_surface(indices, surface):
     """
-    indices_within_bounds filters a set of indices of nodes to those that are under the surface of elements.
+    nodes_within_bounds filters a set of indices of nodes to those that are under the surface of elements.
     A node may be
     :param indices: a set of indices
     :param surface: surface that bounds incides

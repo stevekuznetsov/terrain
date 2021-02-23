@@ -35,7 +35,7 @@ def support(data):
     Plot the support densities for a parcel.
     :param data: support densities for a parcel, as a 3D array
     """
-    density = numpy.ma.masked_where(data <= 1e-10, data)
+    density = numpy.ma.masked_where(data == 0, data)
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     X, Y, Z = numpy.mgrid[:density.shape[0], :density.shape[1], :density.shape[2]]

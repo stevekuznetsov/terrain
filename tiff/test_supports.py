@@ -1,5 +1,6 @@
 import unittest
 import math
+import numpy
 from tiff import support
 
 
@@ -74,9 +75,9 @@ class TestSupports(unittest.TestCase):
         self.assertEqual(support.elemental_index_to_nodal_index((0, 0, 0)), (0.5, 0.5, 0.5))
 
     def test_weighted_filtered_local_neighborhood_nodes_for_element(self):
-        dist = 1-math.sqrt(3/4)/2
+        dist = 1 - math.sqrt(3 / 4) / 2
         self.assertCountEqual(support.weighted_filtered_local_neighborhood_nodes_for_element(
-            (0, 0, 0), 2, (2, 2, 2)
+            (0, 0, 0), 2, (2, 2, 2), 10 * numpy.ones((2, 2))
         ), [
             ((0, 0, 0), dist),
             ((1, 0, 0), dist),
@@ -87,6 +88,17 @@ class TestSupports(unittest.TestCase):
             ((1, 0, 1), dist),
             ((1, 1, 0), dist),
         ])
+
+    def test_node_below_adjacent_elements(self):
+        surface = numpy.array([
+            [0.0, 1.0],
+            [2.0, 3.0],
+        ])
+        self.assertEqual(support.node_below_adjacent_elements((0, 0, 0), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((0, 0, 1), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((0, 1, 2), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((1, 0, 2), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((1, 1, 4), surface), True)
 
 
 if __name__ == '__main__':

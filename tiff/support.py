@@ -47,11 +47,12 @@ def generate_support(config, index, parcels, logger):
     # Down-sampling here also is critical to have any reasonable guarantee that the optimization problem can be
     # solved in human timescales (minutes) instead of geological ones using the native resolution. Allow 30 pixels
     # per minimum feature diameter: inter-pixel distance is the 1/10th the minimum feature radius.
-    pixel_size = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / 10
+    pixel_size = (config["model"]["support"]["minimum_feature_radius_millimeters"] / 1e3) / 5
     scaling_factor = (config["printer"]["xy_resolution_microns"] / 1e6) / pixel_size
     # Any interpolations on data-sets with NaN values are prone to extrapolate the NaNs across the whole data-set.
     # Setting these values to some non-NaN value will result in the surface being "pulled" there at the edges when
     # we interpolate, but it's a simple approach.
+    # TODO: replace NaNs with nearby averages, then replace areas in scaled with NaNs to match where they should be
     filled = numpy.where(numpy.isnan(cropped), numpy.nanmean(cropped), cropped)
     scaled = ndimage.zoom(filled, zoom=scaling_factor)
     logger.debug(
@@ -78,47 +79,44 @@ def generate_support(config, index, parcels, logger):
         )
     )
 
-    logger.debug("Instantiating abstract model...")
-    feature_radius_pixels = 2.0
-    model = abstract_model(
-        (i, j, k), feature_radius_pixels, config["model"]["support"]["self_supporting_angle_degrees"], logger
-    )
-    data = {None: {
-        "heaviside_regularization_parameter": {None: 1.0},
-        "maximum_support_magnitude": {None: 1.0},
-    }}
+    logger.debug("Instantiating model...")
     instance_start = datetime.now()
-    instance = model.create_instance(data=data)
+    feature_radius_pixels = math.sqrt(3) / 2
+    model = concrete_model(
+        (i, j, k), regularized_surface, feature_radius_pixels,
+        config["model"]["support"]["self_supporting_angle_degrees"], 1.0, 1.0, logger
+    )
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
     fixing_start = datetime.now()
     logger.debug("Fixing variables...")
     for I in range(i + 1):
         for J in range(j + 1):
-            instance.nodal_support_density[I, J, 0].fix(1)  # build plate
+            model.nodal_support_density[I, J, 0].fix(1)  # build plate
     for I in range(i):
         for J in range(j):
-            instance.elemental_density[I, J, indices[I, J]].fix(1)  # surface
+            model.elemental_density[I, J, indices[I, J]].fix(1)  # surface
             for K in range(int(indices[I, J]) + 1, k):
-                instance.elemental_density[I, J, K].fix(0)  # above the surface
+                model.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
     opt = pyo.SolverFactory('ipopt')
     solving_start = datetime.now()
     logger.debug("Solving for optimal support...")
-    opt.solve(instance, tee=True)
+    opt.solve(model, tee=True)
     logger.debug("Solving for optimal support took {}.".format(datetime.now() - solving_start))
     output = numpy.empty((i, j, k - 1))
     output[:] = numpy.nan
     for I in range(i):
         for J in range(j):
             for K in range(1, k):  # ignore the build plate
-                output[I, J, K - 1] = instance.elemental_density[I, J, K].value
+                output[I, J, K - 1] = model.elemental_density[I, J, K].value
 
     # TODO: uncrop to size of original data
     numpy.save(cached_data, output)
 
 
-def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, logger):
+def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_degrees,
+                   heaviside_regularization_parameter, maximum_support_magnitude, logger):
     """
     abstract_model creates an abstract model for the topology optimization problem
     :param shape: shape of element mesh
@@ -128,12 +126,12 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
     :return: a PyOMO Abstract Model
     """
     logger.debug(
-        "Building an abstract model of shape {} with a minimum feature radius of {}px and "
+        "Building a model of shape {} with a minimum feature radius of {}px and "
         "self-supporting angle of {} degrees.".format(
             shape, feature_radius_pixels, self_supporting_angle_degrees
         )
     )
-    model = pyo.AbstractModel()
+    model = pyo.ConcreteModel()
 
     # Our elements exist within the nodal mesh at intermediate positions between
     # nodes. We index into our elements through ranges [0..i), [0..j), and [0..k)
@@ -155,24 +153,23 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
     model.nodal_support_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
-    model.heaviside_regularization_parameter = pyo.Param(within=pyo.PositiveReals)
-    model.maximum_support_magnitude = pyo.Param(within=pyo.PositiveReals)
-
     # the elemental density is constrained by the support densities in the nearby nodes, to ensure
     # that the solver creates homogeneous solids without voids
     def elemental_density_constraint(m, i_e, j_e, k_e):
+        if k_e > surface[i_e, j_e]:
+            return pyo.Constraint.Skip
         element_index = (i_e, j_e, k_e)
         elemental_supports = []
         for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                element_index, feature_radius_pixels, (I_e, J_e, K_e)
+                element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
         ):
             (x, y, z) = neighbor
             elemental_supports.append(factor * m.nodal_support_density[x, y, z])
         elemental_support = sum(elemental_supports)
         return m.elemental_density[i_e, j_e, k_e] == 1 - \
-               pyo.exp(-m.heaviside_regularization_parameter * elemental_support) + \
-               (elemental_support / m.maximum_support_magnitude) * \
-               pyo.exp(-m.heaviside_regularization_parameter * m.maximum_support_magnitude)
+               pyo.exp(-heaviside_regularization_parameter * elemental_support) + \
+               (elemental_support / maximum_support_magnitude) * \
+               pyo.exp(-heaviside_regularization_parameter * maximum_support_magnitude)
 
     model.elemental_density_constraint = pyo.Constraint(
         model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
@@ -185,17 +182,20 @@ def abstract_model(shape, feature_radius_pixels, self_supporting_angle_degrees, 
     # support to the node in question
     def nodal_support_constraint(m, i, j, k):
         node_index = (i, j, k)
+        if not node_below_adjacent_elements(node_index, surface):
+            return pyo.Constraint.Skip
         neighbors = []
-        for neighbor in indices_within_bounds(
-                supporting_nodes_for_node(node_index, feature_radius_pixels, self_supporting_angle_degrees),
-                (I, J, K)
-        ):
+        for neighbor in indices_beneath_surface(
+                indices_within_bounds(
+                    supporting_nodes_for_node(node_index, feature_radius_pixels * 1.5, self_supporting_angle_degrees),
+                    (I, J, K)
+                ), surface):
             (x, y, z) = neighbor
             neighbors.append(m.nodal_support_density[x, y, z])
         nodal_support = sum(neighbors) / len(neighbors)
-        heaviside_constant = pyo.tanh(m.heaviside_regularization_parameter * threshold_heaviside_value)
-        numerator = pyo.tanh(m.heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
-        denominator = pyo.tanh(m.heaviside_regularization_parameter * (1 - threshold_heaviside_value))
+        heaviside_constant = pyo.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
+        numerator = pyo.tanh(heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
+        denominator = pyo.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
         return m.nodal_support_density[i, j, k] <= \
                (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
@@ -228,18 +228,22 @@ def crop_nans(array):
     return (first_column, first_row), array[first_row:last_row, first_column:last_column]
 
 
-def weighted_filtered_local_neighborhood_nodes_for_element(index, feature_radius_pixels, bounds):
+def weighted_filtered_local_neighborhood_nodes_for_element(index, feature_radius_pixels, bounds, surface):
     """
     weighted_filtered_local_neighborhood_nodes_for_element returns the weighted, filtered neighboring set of nodes
     for an element for use in the elemental density constraint
     :param index: the element for which we want the local neighborhood
     :param feature_radius_pixels: minimum feature radius, in pixels
     :param bounds: upper bounds for each axis, implicit minimum at 0
+    :param surface: surface that bounds indices in the mesh
     :return: the indices of the local neighborhood set within bounds with their weights
     """
-    neighbors = indices_within_bounds(
-        local_neighborhood_nodes_for_element(index, feature_radius_pixels),
-        bounds
+    neighbors = indices_beneath_surface(
+        indices_within_bounds(
+            local_neighborhood_nodes_for_element(index, feature_radius_pixels),
+            bounds
+        ),
+        surface
     )
     weighted_neighbors = []
     for neighbor in neighbors:
@@ -338,6 +342,37 @@ def indices_within_bounds(indices, bounds):
         if not invalid:
             filtered.add(index)
     return filtered
+
+
+def indices_beneath_surface(indices, surface):
+    """
+    indices_within_bounds filters a set of indices of nodes to those that are under the surface of elements.
+    A node may be
+    :param indices: a set of indices
+    :param surface: surface that bounds incides
+    :return: filtered indices within bounds
+    """
+    filtered = set()
+    for index in indices:
+        if node_below_adjacent_elements(index, surface):
+            filtered.add(index)
+    return filtered
+
+
+def node_below_adjacent_elements(node, surface):
+    """
+    node_below_adjacent_elements determines if a node is adjacent to any element in the surface
+    :param node: index of a node
+    :param surface: mesh of element heights
+    :return: boolean
+    """
+    (i, j, k) = node
+    maximum = 0
+    for location in [(i - 1, j - 1), (i, j - 1), (i - 1, j), (i, j)]:
+        if not (0 <= i < surface.shape[0] and 0 <= j < surface.shape[1]):
+            continue
+        maximum = max(maximum, surface[location])
+    return k <= maximum + 1
 
 
 def elemental_index_to_nodal_index(index):

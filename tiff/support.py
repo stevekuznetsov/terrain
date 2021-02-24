@@ -361,7 +361,15 @@ def nodes_beneath_surface(indices, surface):
 
 def node_below_adjacent_elements(node, surface):
     """
-    node_below_adjacent_elements determines if a node is adjacent to any element in the surface
+    node_below_adjacent_elements determines if a node is below any element adjacent to it in the surface.
+    Consider the following layout:
+
+    *-*-*-*  Here, the nodes are shown as * and node (0,0) as X. Elements are shown as o and neighboring
+    |O|O|o|  elements to node X are O. This function determines if a node (i,j,k) is adjacent to or beneath
+    *-x-*-*  any of the elements for which it could be a vertex. As four elements share a "corner", we need
+    |O|O|o|  to check to see if the node is at the highest element position or below for any corner.
+    *-*-*-*
+
     :param node: index of a node
     :param surface: mesh of element heights
     :return: boolean

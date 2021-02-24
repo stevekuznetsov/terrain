@@ -94,7 +94,7 @@ def generate_support(config, index, parcels, logger):
             model.nodal_support_density[I, J, 0].fix(1)  # build plate
     for I in range(i):
         for J in range(j):
-            model.elemental_density[I, J, indices[I, J]].fix(1)  # surface
+            model.elemental_density[I, J, indices[I, J]].setlb(0.9)  # surface
             for K in range(int(indices[I, J]) + 1, k):
                 model.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))

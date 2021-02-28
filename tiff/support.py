@@ -104,7 +104,7 @@ def generate_support(config, index, parcels, logger):
     logger.debug("Fixing variables...")
     for I in range(i + 1):
         for J in range(j + 1):
-            model.nodal_support_density[I, J, 0].fix(1)  # build plate
+            model.nodal_support[I, J, 0].fix(1)  # build plate
     for I in range(i):
         for J in range(j):
             surface_index = indices[I, J]
@@ -169,7 +169,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
 
     # elemental density and nodal support densities are fractional
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
-    model.nodal_support_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
+    model.nodal_support = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
     # the elemental density is constrained by the support densities in the nearby nodes, to ensure
     # that the solver creates homogeneous solids without voids
@@ -182,7 +182,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
                 element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
         ):
             (x, y, z) = neighbor
-            elemental_supports.append(factor * m.nodal_support_density[x, y, z])
+            elemental_supports.append(factor * m.nodal_support[x, y, z])
         elemental_support = sum(elemental_supports)
         return m.elemental_density[i_e, j_e, k_e] == 1 - \
                pyo.exp(-heaviside_regularization_parameter * elemental_support) + \
@@ -211,12 +211,12 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
                     (I, J, K)
                 ), surface):
             (x, y, z) = neighbor
-            neighbors.append(m.nodal_support_density[x, y, z])
+            neighbors.append(m.nodal_support[x, y, z])
         nodal_support = sum(neighbors) / len(neighbors)
         heaviside_constant = pyo.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
         numerator = pyo.tanh(heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
         denominator = pyo.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
-        return m.nodal_support_density[i, j, k] <= \
+        return m.nodal_support[i, j, k] <= \
                (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
     model.nodal_support_constraint = pyo.Constraint(

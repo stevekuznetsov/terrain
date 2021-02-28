@@ -201,8 +201,6 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
     # support to the node in question
     def nodal_support_constraint(m, i, j, k):
         node_index = (i, j, k)
-        if k == 0:
-            return pyo.Constraint.Skip  # build plate has no neighboring nodes underneath it
         if not node_below_adjacent_elements(node_index, surface):
             return pyo.Constraint.Skip  # nothing to support above this pixel
         neighbors = []

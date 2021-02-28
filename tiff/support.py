@@ -4,6 +4,7 @@ import numpy
 import math
 import os
 from scipy import ndimage
+from pyomo.util.infeasible import log_infeasible_constraints
 
 # __CACHE_SUPPORT_DIR__ is the root for the files we will store support arrays in
 __CACHE_SUPPORT_DIR__ = "supports"
@@ -96,7 +97,7 @@ def generate_support(config, index, parcels, logger):
     feature_radius_pixels = math.sqrt(3) / 2
     model = concrete_model(
         (i, j, k), regularized_surface, feature_radius_pixels,
-        config["model"]["support"]["self_supporting_angle_degrees"], 1.0, 1.0, logger
+        config["model"]["support"]["self_supporting_angle_degrees"], 10.0, 1.0, logger
     )
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
     fixing_start = datetime.now()
@@ -106,8 +107,12 @@ def generate_support(config, index, parcels, logger):
             model.nodal_support_density[I, J, 0].fix(1)  # build plate
     for I in range(i):
         for J in range(j):
-            model.elemental_density[I, J, indices[I, J]].setlb(0.9)  # surface
-            for K in range(int(indices[I, J]) + 1, k):
+            surface_index = indices[I, J]
+            if surface_index == 0:
+                continue  # no surface here
+
+            model.elemental_density[I, J, surface_index].setlb(0.9)  # surface
+            for K in range(int(surface_index) + 1, k):
                 model.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
@@ -116,6 +121,7 @@ def generate_support(config, index, parcels, logger):
     logger.debug("Solving for optimal support...")
     opt.solve(model, tee=True)
     logger.debug("Solving for optimal support took {}.".format(datetime.now() - solving_start))
+    log_infeasible_constraints(model, logger=logger, log_variables=True, log_expression=True)
     output = numpy.empty((i, j, k - 1))
     output[:] = numpy.nan
     for I in range(i):
@@ -194,8 +200,10 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
     # support to the node in question
     def nodal_support_constraint(m, i, j, k):
         node_index = (i, j, k)
+        if k == 0:
+            return pyo.Constraint.Skip  # build plate has no neighboring nodes underneath it
         if not node_below_adjacent_elements(node_index, surface):
-            return pyo.Constraint.Skip
+            return pyo.Constraint.Skip  # nothing to support above this pixel
         neighbors = []
         for neighbor in nodes_beneath_surface(
                 nodes_within_bounds(

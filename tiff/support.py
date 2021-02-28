@@ -111,9 +111,9 @@ def generate_support(config, index, parcels, logger):
             if surface_index == 0:
                 continue  # no surface here
 
-            model.elemental_density[I, J, surface_index].setlb(0.9)  # surface
+            model.nodal_design[I, J, surface_index].fix(1)  # surface
             for K in range(int(surface_index) + 1, k):
-                model.elemental_density[I, J, K].fix(0)  # above the surface
+                model.nodal_design[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
     opt = pyo.SolverFactory('ipopt')
@@ -167,10 +167,14 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
     model.J = pyo.RangeSet(0, J - 1)
     model.K = pyo.RangeSet(0, K - 1)
 
-    # elemental density and nodal support densities are fractional
+    # elemental density (rho^e) determines where elements in the lattice are filled
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
+    # nodal_density (phi^i) determines which nodes in the lattice are filled
     model.nodal_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
+    # nodal_support (rho_s^i) depends on nodal density and shows where material may be placed
     model.nodal_support = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
+    # nodal_design (phi^i) is independant and shows where material should be placed
+    model.nodal_design = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
     # the elemental density is constrained by the support densities in the nearby nodes, to ensure
     # that the solver creates homogeneous solids without voids
@@ -197,7 +201,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
 
     threshold_heaviside_value = (180 / (2 * math.pi * (90 - self_supporting_angle_degrees))) / feature_radius_pixels
 
-    # the nodal support density is at most the support densities from the set of nodes that confer
+    # the nodal support is determined from the support densities from the set of nodes that confer
     # support to the node in question
     def nodal_support_constraint(m, i, j, k):
         node_index = (i, j, k)
@@ -210,17 +214,28 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
                     (I, J, K)
                 ), surface):
             (x, y, z) = neighbor
-            neighbors.append(m.nodal_support[x, y, z])
+            neighbors.append(m.nodal_density[x, y, z])
         nodal_support = sum(neighbors) / len(neighbors)
         heaviside_constant = pyo.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
         numerator = pyo.tanh(heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
         denominator = pyo.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
-        return m.nodal_density[i, j, k] >= \
-               (heaviside_constant + numerator) / (heaviside_constant + denominator)
+        return m.nodal_support[i, j, k] == (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
     model.nodal_support_constraint = pyo.Constraint(
         model.I, model.J, pyo.RangeSet(1, K - 1),  # ignore z=0 where the build plate is
         rule=nodal_support_constraint
+    )
+
+    # the nodal density is determined from whether material should be placed and whether it may be placed
+    def nodal_density_constraint(m, i, j, k):
+        node_index = (i, j, k)
+        if not node_below_adjacent_elements(node_index, surface):
+            return pyo.Constraint.Skip  # nothing to support above this pixel
+        return m.nodal_density[i, j, k] == m.nodal_design[i, j, k] * m.nodal_support[i, j, k]
+
+    model.nodal_density_constraint = pyo.Constraint(
+        model.I, model.J, pyo.RangeSet(1, K - 1),  # ignore z=0 where the build plate is
+        rule=nodal_density_constraint
     )
 
     # we want to minimize the total amount of material placed

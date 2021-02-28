@@ -111,9 +111,9 @@ def generate_support(config, index, parcels, logger):
             if surface_index == 0:
                 continue  # no surface here
 
-            model.nodal_design[I, J, surface_index].fix(1)  # surface
+            model.elemental_density[I, J, surface_index].fix(1)  # surface
             for K in range(int(surface_index) + 1, k):
-                model.nodal_design[I, J, K].fix(0)  # above the surface
+                model.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
     opt = pyo.SolverFactory('ipopt')

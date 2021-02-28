@@ -51,10 +51,22 @@ def generate_support(config, index, parcels, logger):
     scaling_factor = (config["printer"]["xy_resolution_microns"] / 1e6) / pixel_size
     # Any interpolations on data-sets with NaN values are prone to extrapolate the NaNs across the whole data-set.
     # Setting these values to some non-NaN value will result in the surface being "pulled" there at the edges when
-    # we interpolate, but it's a simple approach.
-    # TODO: replace NaNs with nearby averages, then replace areas in scaled with NaNs to match where they should be
-    filled = numpy.where(numpy.isnan(cropped), numpy.nanmean(cropped), cropped)
-    scaled = ndimage.zoom(filled, zoom=scaling_factor)
+    # we interpolate, so a Gaussian kernel is used to fill nearby values with values similar to those in the dataset.
+    # As a boundary between NaN and non-NaN values without much curvature will result in NaN fills of about half
+    # magnitude, we optimistically multiply by 1.75 here to reduce as much of the "pull" as possible.
+    blurred = numpy.copy(cropped)
+    if numpy.isnan(cropped).any():
+        with_zeroes = numpy.where(numpy.isnan(cropped), 0, cropped)
+        blur = ndimage.gaussian_filter(with_zeroes, sigma=10, mode="nearest")
+        blurred = numpy.where(numpy.isnan(cropped), 1.75 * blur, cropped)
+
+    scaled = ndimage.zoom(blurred, zoom=scaling_factor)
+    if numpy.isnan(cropped).any():
+        # Let's replace pixels in the scaled version with NaN when the raw data was all NaNs
+        only_nans = numpy.where(numpy.isnan(cropped), 1, 0)
+        scaled_nans = ndimage.zoom(only_nans, zoom=scaling_factor)
+        scaled = numpy.where(scaled_nans == 1, numpy.nan, scaled)
+
     logger.debug(
         "Scaling surface to a pixel size of {}mm (using a scaling factor of 1:{:.2f}) results in a surface shape of {}.".format(
             config["model"]["support"]["minimum_feature_radius_millimeters"], 1 / scaling_factor, scaled.shape

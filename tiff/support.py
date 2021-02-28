@@ -182,16 +182,16 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         if k_e > surface[i_e, j_e]:
             return pyo.Constraint.Skip
         element_index = (i_e, j_e, k_e)
-        elemental_supports = []
+        neighborhood_densities = []
         for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
                 element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
         ):
             (x, y, z) = neighbor
-            elemental_supports.append(factor * m.nodal_density[x, y, z])
-        elemental_support = sum(elemental_supports)
+            neighborhood_densities.append(factor * m.nodal_density[x, y, z])
+        neighborhood_density = sum(neighborhood_densities)
         return m.elemental_density[i_e, j_e, k_e] == 1 - \
-               pyo.exp(-heaviside_regularization_parameter * elemental_support) + \
-               (elemental_support / maximum_support_magnitude) * \
+               pyo.exp(-heaviside_regularization_parameter * neighborhood_density) + \
+               (neighborhood_density / maximum_support_magnitude) * \
                pyo.exp(-heaviside_regularization_parameter * maximum_support_magnitude)
 
     model.elemental_density_constraint = pyo.Constraint(

@@ -169,6 +169,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
 
     # elemental density and nodal support densities are fractional
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
+    model.nodal_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
     model.nodal_support = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
     # the elemental density is constrained by the support densities in the nearby nodes, to ensure
@@ -182,7 +183,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
                 element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
         ):
             (x, y, z) = neighbor
-            elemental_supports.append(factor * m.nodal_support[x, y, z])
+            elemental_supports.append(factor * m.nodal_density[x, y, z])
         elemental_support = sum(elemental_supports)
         return m.elemental_density[i_e, j_e, k_e] == 1 - \
                pyo.exp(-heaviside_regularization_parameter * elemental_support) + \
@@ -216,7 +217,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         heaviside_constant = pyo.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
         numerator = pyo.tanh(heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
         denominator = pyo.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
-        return m.nodal_support[i, j, k] <= \
+        return m.nodal_density[i, j, k] >= \
                (heaviside_constant + numerator) / (heaviside_constant + denominator)
 
     model.nodal_support_constraint = pyo.Constraint(

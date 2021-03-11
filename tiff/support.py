@@ -5,12 +5,13 @@ import math
 import os
 from scipy import ndimage
 from pyomo.util.infeasible import log_infeasible_constraints
+import matplotlib.pyplot as plt
 
 # __CACHE_SUPPORT_DIR__ is the root for the files we will store support arrays in
 __CACHE_SUPPORT_DIR__ = "supports"
 
 
-def generate_supports(config, parcels, logger):
+def generate_supports(config, debug_config, parcels, logger):
     """
     generate_supports generates support material for all parcels below the bottom surface such that the output
     shape is self-supporting and a minimal amount of support material is used
@@ -25,20 +26,33 @@ def generate_supports(config, parcels, logger):
 
     cache.mkdir(parents=True, exist_ok=True)
     for index, parcel in parcels:
-        generate_support(config, index, parcels, logger)
+        generate_support(config, debug_config, index, parcels, logger)
 
     return SupportLoader(cache, logger)
 
 
-def generate_support(config, index, parcels, logger):
+def generate_support(config, debug_config, index, parcels, logger):
     cache = config["meta"]["cache"].joinpath(__CACHE_SUPPORT_DIR__)
     cache.mkdir(parents=True, exist_ok=True)
     cached_data = cache.joinpath("{}_{}.npy".format(index[0], index[1]))
+
     if cached_data.exists():
         return
 
     parcel = parcels.parcel_at_index(index)
     surface = parcel[1]  # we want to support the bottom
+    generate_support_for_surface(config, debug_config, surface, logger)
+
+
+def generate_support_for_surface(config, debug_config, surface, logger):
+    if debug_config["plot_input_surface"]:
+        fig = plt.figure()
+        ax = fig.gca(projection='3d')
+        ax.set_title("input surface")
+        X, Y = numpy.mgrid[:surface.shape[0], :surface.shape[1]]
+        ax.plot_surface(X, Y, surface, cmap=plt.viridis())
+        plt.show()
+
     crop_index, cropped = crop_nans(surface)
     logger.debug("Cropping NaNs took surface shape from {} to {}".format(surface.shape, cropped.shape))
 
@@ -53,13 +67,16 @@ def generate_support(config, index, parcels, logger):
     # Any interpolations on data-sets with NaN values are prone to extrapolate the NaNs across the whole data-set.
     # Setting these values to some non-NaN value will result in the surface being "pulled" there at the edges when
     # we interpolate, so a Gaussian kernel is used to fill nearby values with values similar to those in the dataset.
-    # As a boundary between NaN and non-NaN values without much curvature will result in NaN fills of about half
-    # magnitude, we optimistically multiply by 1.75 here to reduce as much of the "pull" as possible.
+    # As a boundary between NaN and non-NaN values will result in NaN fills of varying magnitude depending on the
+    # curvature of the boundary between the NaN and non-NaN regions, we scale the result to account for this.
     blurred = numpy.copy(cropped)
     if numpy.isnan(cropped).any():
         with_zeroes = numpy.where(numpy.isnan(cropped), 0, cropped)
         blur = ndimage.gaussian_filter(with_zeroes, sigma=10, mode="nearest")
-        blurred = numpy.where(numpy.isnan(cropped), 1.75 * blur, cropped)
+        only_data = numpy.where(numpy.isnan(cropped), 0, 1)
+        magnitude = ndimage.gaussian_filter(only_data, sigma=10, mode="nearest")
+        scaled_blur = numpy.divide(blur, magnitude, out=blur, where=magnitude != 0)
+        blurred = numpy.where(numpy.isnan(cropped), scaled_blur, cropped)
 
     scaled = ndimage.zoom(blurred, zoom=scaling_factor)
     if numpy.isnan(cropped).any():
@@ -75,8 +92,9 @@ def generate_support(config, index, parcels, logger):
     )
 
     # Slice the total Z height in this parcel into layers as high as our pixels are wide, or our angle calculations
-    # get all messy. Add one layer for the fixed variables modeling the build plate at the bottom.
-    layers = math.floor((numpy.nanmax(scaled) - numpy.nanmin(scaled)) / pixel_size) + 2
+    # get all messy. Add one layer for the fixed variables modeling the build plate at the bottom, and 4 for the
+    # surface itself.
+    layers = math.floor((numpy.nanmax(scaled) - numpy.nanmin(scaled)) / pixel_size) + 2 + 4
     i, j, k = scaled.shape[0], scaled.shape[1], layers
     logger.debug(
         "Full abstract model with shape ({},{},{}) will contain up to {} variables.".format(
@@ -84,39 +102,97 @@ def generate_support(config, index, parcels, logger):
         )
     )
 
-    regularized_surface = numpy.floor((scaled - numpy.nanmin(scaled)) / pixel_size) + 1
-    indices = numpy.where(numpy.isnan(regularized_surface), 0, regularized_surface)
+    regularized_surface = numpy.floor((scaled - numpy.nanmin(scaled)) / pixel_size) + 1 + 4
+    indices = numpy.where(numpy.isnan(regularized_surface), -2, regularized_surface)
     logger.debug(
         "After fixing surface pixels, those above them and NaN regions, {} variables remain.".format(
             int(numpy.ndarray.sum(indices))
         )
     )
 
+    if debug_config["plot_surface_indices"]:
+        fig = plt.figure()
+        surf = numpy.empty((i, j, k))
+        surf[:] = numpy.nan
+        for I in range(i):
+            for J in range(j):
+                index = int(indices[I, J])
+                if index > 0:
+                    surf[I, J, index - 4:index] = indices[I, J]
+        ax = fig.add_subplot(1, 1, 1, projection='3d')
+        ax.set_title("surface indices")
+        ax.view_init(elev=6, azim=17)
+        ax.set_xlim([0, i + 1])
+        ax.set_ylim([0, j + 1])
+        ax.set_zlim([0, k + 1])
+        X, Y, Z = numpy.mgrid[:surf.shape[0], :surf.shape[1], :surf.shape[2]]
+        img2 = ax.scatter(X, Y, Z, c=surf.ravel(), cmap=plt.viridis())
+        fig.colorbar(img2)
+        plt.show()
+
     logger.debug("Instantiating model...")
     instance_start = datetime.now()
-    feature_radius_pixels = math.sqrt(3) / 2
+    feature_radius_pixels = 1
     model = concrete_model(
-        (i, j, k), regularized_surface, feature_radius_pixels,
-        config["model"]["support"]["self_supporting_angle_degrees"], 10.0, 1.0, logger
+        (i, j, k), indices, feature_radius_pixels,
+        config["model"]["support"]["self_supporting_angle_degrees"], 20.0, 1.0, logger
     )
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
     fixing_start = datetime.now()
     logger.debug("Fixing variables...")
     for I in range(i + 1):
         for J in range(j + 1):
-            model.nodal_support[I, J, 0].fix(1)  # build plate
+            model.nodal_projection[I, J, 0].fix(1)  # build plate
+            model.nodal_design[I, J, 0].fix(1)  # build plate
     for I in range(i):
         for J in range(j):
             surface_index = indices[I, J]
-            if surface_index == 0:
-                continue  # no surface here
-
-            model.elemental_density[I, J, surface_index].fix(1)  # surface
+            if surface_index < 0:
+                surface_index = -1  # no surface here
+            else:
+                nodes = set()
+                for K in range(int(surface_index) - 4, int(surface_index) + 1):
+                    # we need to set all nodes adjacent to these elements
+                    i_e, j_e, k_e = elemental_index_to_nodal_index((I, J, K))
+                    for delta in [
+                        (-0.5, -0.5, -0.5),
+                        (+0.5, -0.5, -0.5),
+                        (-0.5, +0.5, -0.5),
+                        (-0.5, -0.5, +0.5),
+                        (+0.5, +0.5, -0.5),
+                        (+0.5, -0.5, +0.5),
+                        (-0.5, +0.5, +0.5),
+                        (+0.5, +0.5, +0.5),
+                    ]:
+                        d_i, d_j, d_k = delta
+                        nodes.add((i_e + d_i, j_e + d_j, k_e + d_k))
+                for node in nodes_within_bounds(nodes, (i + 1, j + 1, k + 1)):
+                    i_n, j_n, k_n = node
+                    model.nodal_density[i_n, j_n, k_n].fix(1)  # surface
+            # for K in range(1, int(surface_index) - 4):
+            #     model.nodal_density[I, J, K].fix(0)  # below the surface
+            for K in range(int(surface_index) + 2, k + 1):
+                model.nodal_density[I, J, K].fix(0)  # above the surface
+    for I in range(i):
+        for J in range(j):
+            surface_index = indices[I, J]
+            if surface_index < 0:
+                surface_index = -1  # no surface here
+            # else:
+            #     for K in range(int(surface_index) - 4, int(surface_index) + 1):
+            #         model.elemental_density[I, J, K].fix(1)  # surface
+            # for K in range(0, int(surface_index) - 4):
+            #     model.elemental_density[I, J, K].setub(0.1)  # below the surface
             for K in range(int(surface_index) + 1, k):
                 model.elemental_density[I, J, K].fix(0)  # above the surface
     logger.debug("Fixing variables took {}.".format(datetime.now() - fixing_start))
 
+    if debug_config["plot_optimization_parameters"]:
+        extract_and_plot(model, i, j, k)
+
+    # model.pprint()
     opt = pyo.SolverFactory('ipopt')
+    opt.options['tol'] = 1e-2
     solving_start = datetime.now()
     logger.debug("Solving for optimal support...")
     opt.solve(model, tee=True)
@@ -129,8 +205,69 @@ def generate_support(config, index, parcels, logger):
             for K in range(1, k):  # ignore the build plate
                 output[I, J, K - 1] = model.elemental_density[I, J, K].value
 
-    # TODO: uncrop to size of original data
-    numpy.save(cached_data, output)
+    if debug_config["plot_optimization_parameters"]:
+        extract_and_plot(model, i, j, k)
+
+    # # TODO: uncrop to size of original data
+    # numpy.save(cached_data, output)
+
+
+def extract_and_plot(model, i, j, k):
+    elemental_density = numpy.empty((i, j, k))
+    elemental_density[:] = numpy.nan
+    elemental_neighborhood = numpy.empty((i, j, k))
+    elemental_neighborhood[:] = numpy.nan
+    for I in range(i):
+        for J in range(j):
+            for K in range(0, k):
+                elemental_density[I, J, K] = model.elemental_density[I, J, K].value
+                elemental_neighborhood[I, J, K] = model.elemental_neighborhood[I, J, K].value
+    elemental_density = numpy.ma.masked_where(elemental_density < 1e-5, elemental_density)
+    elemental_neighborhood = numpy.ma.masked_where(elemental_neighborhood < 1e-5, elemental_neighborhood)
+
+    nodal_density = numpy.empty((i + 1, j + 1, k + 1))
+    nodal_density[:] = numpy.nan
+    nodal_projection = numpy.empty((i + 1, j + 1, k + 1))
+    nodal_projection[:] = numpy.nan
+    nodal_support = numpy.empty((i + 1, j + 1, k + 1))
+    nodal_support[:] = numpy.nan
+    nodal_design = numpy.empty((i + 1, j + 1, k + 1))
+    nodal_design[:] = numpy.nan
+    for I in range(i + 1):
+        for J in range(j + 1):
+            for K in range(0, k + 1):
+                nodal_density[I, J, K] = model.nodal_density[I, J, K].value
+                nodal_projection[I, J, K] = model.nodal_projection[I, J, K].value
+                nodal_support[I, J, K] = model.nodal_support[I, J, K].value
+                nodal_design[I, J, K] = model.nodal_design[I, J, K].value
+    nodal_density = numpy.ma.masked_where(nodal_density < 1e-5, nodal_density)
+    nodal_projection = numpy.ma.masked_where(nodal_projection < 1e-5, nodal_projection)
+    nodal_support = numpy.ma.masked_where(nodal_support < 1e-5, nodal_support)
+    nodal_design = numpy.ma.masked_where(nodal_design < 1e-5, nodal_design)
+
+    fig = plt.figure()
+    ix = 0
+    axes = []
+    for key, value in {
+        "elemental_density (rho^e)": elemental_density,
+        "elemental_neighborhood (mu^e)": elemental_neighborhood,
+        "nodal_density (phi^i)": nodal_density,
+        "nodal_projection (rho_s^i)": nodal_projection,
+        "nodal_design (psi^i)": nodal_design,
+        "nodal_support (mu_s^i)": nodal_support,
+    }.items():
+        ax = fig.add_subplot(2, 4, ix + 3, projection='3d')
+        ix += 1
+        ax.set_title(key)
+        ax.view_init(elev=6, azim=17)
+        ax.set_xlim([0, i + 1])
+        ax.set_ylim([0, j + 1])
+        ax.set_zlim([0, k + 1])
+        X, Y, Z = numpy.mgrid[:value.shape[0], :value.shape[1], :value.shape[2]]
+        img = ax.scatter(X, Y, Z, c=value.ravel(), cmap=plt.viridis(), vmin=0, vmax=1)
+        axes.append(ax)
+    plt.colorbar(img, ax=axes)
+    plt.show()
 
 
 def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_degrees,
@@ -169,16 +306,19 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
 
     # elemental density (rho^e) determines where elements in the lattice are filled
     model.elemental_density = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
+    # elemental neighborhood (mu^e) is a weighted average of surrounding nodal densities
+    model.elemental_neighborhood = pyo.Var(model.I_e, model.J_e, model.K_e, domain=pyo.UnitInterval)
     # nodal_density (phi^i) determines which nodes in the lattice are filled
     model.nodal_density = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
-    # nodal_support (rho_s^i) depends on nodal density and shows where material may be placed
+    # nodal_projection (rho_s^i) depends on nodal density and shows where material may be placed
+    model.nodal_projection = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
+    # nodal_support (mu_s^i) aggregates support values below the node
     model.nodal_support = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
-    # nodal_design (phi^i) is independant and shows where material should be placed
+    # nodal_design (psi^i) is independent and shows where material should be placed
     model.nodal_design = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
-    # the elemental density is constrained by the support densities in the nearby nodes, to ensure
-    # that the solver creates homogeneous solids without voids
-    def elemental_density_constraint(m, i_e, j_e, k_e):
+    # the elemental neighborhood is computed from a weighted average of surrounding nodes
+    def elemental_neighborhood_constraint(m, i_e, j_e, k_e):
         if k_e > surface[i_e, j_e]:
             return pyo.Constraint.Skip
         element_index = (i_e, j_e, k_e)
@@ -188,18 +328,27 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         ):
             (x, y, z) = neighbor
             neighborhood_densities.append(factor * m.nodal_density[x, y, z])
-        neighborhood_density = sum(neighborhood_densities)
+        return m.elemental_neighborhood[i_e, j_e, k_e] == sum(neighborhood_densities)
+
+    model.elemental_neighborhood_constraint = pyo.Constraint(
+        model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
+        rule=elemental_neighborhood_constraint
+    )
+
+    # the elemental density is constrained by the support densities in the nearby nodes, to ensure
+    # that the solver creates homogeneous solids without voids
+    def elemental_density_constraint(m, i_e, j_e, k_e):
+        if k_e > surface[i_e, j_e]:
+            return pyo.Constraint.Skip
         return m.elemental_density[i_e, j_e, k_e] == 1 - \
-               pyo.exp(-heaviside_regularization_parameter * neighborhood_density) + \
-               (neighborhood_density / maximum_support_magnitude) * \
+               pyo.exp(-heaviside_regularization_parameter * m.elemental_neighborhood[i_e, j_e, k_e]) + \
+               (m.elemental_neighborhood[i_e, j_e, k_e] / maximum_support_magnitude) * \
                pyo.exp(-heaviside_regularization_parameter * maximum_support_magnitude)
 
     model.elemental_density_constraint = pyo.Constraint(
         model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
         rule=elemental_density_constraint
     )
-
-    threshold_heaviside_value = (180 / (2 * math.pi * (90 - self_supporting_angle_degrees))) / feature_radius_pixels
 
     # the nodal support is determined from the support densities from the set of nodes that confer
     # support to the node in question
@@ -210,20 +359,43 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         neighbors = []
         for neighbor in nodes_beneath_surface(
                 nodes_within_bounds(
-                    supporting_nodes_for_node(node_index, feature_radius_pixels * 1.5, self_supporting_angle_degrees),
+                    supporting_nodes_for_node(node_index, feature_radius_pixels * math.sqrt(2),
+                                              self_supporting_angle_degrees),
                     (I, J, K)
                 ), surface):
             (x, y, z) = neighbor
             neighbors.append(m.nodal_density[x, y, z])
-        nodal_support = sum(neighbors) / len(neighbors)
-        heaviside_constant = pyo.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
-        numerator = pyo.tanh(heaviside_regularization_parameter * (nodal_support - threshold_heaviside_value))
-        denominator = pyo.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
-        return m.nodal_support[i, j, k] == (heaviside_constant + numerator) / (heaviside_constant + denominator)
+        return m.nodal_support[i, j, k] == sum(neighbors) / len(neighbors)
 
     model.nodal_support_constraint = pyo.Constraint(
         model.I, model.J, pyo.RangeSet(1, K - 1),  # ignore z=0 where the build plate is
         rule=nodal_support_constraint
+    )
+
+    # threshold_heaviside_value = (180 / (4 * math.pi * (90 - self_supporting_angle_degrees))) / feature_radius_pixels
+    threshold_heaviside_value = .1
+    heaviside_constant = numpy.tanh(heaviside_regularization_parameter * threshold_heaviside_value)
+    denominator = heaviside_constant + numpy.tanh(heaviside_regularization_parameter * (1 - threshold_heaviside_value))
+    logger.debug(
+        "Using a Heaviside threshold of {:.4f} and a Heaviside constant of {:.4f}, leading to a"
+        " denominator of {:.4f}".format(
+            threshold_heaviside_value, heaviside_constant, denominator
+        )
+    )
+
+    # the nodal projection a heaviside projection of the nodal support variables
+    def nodal_projection_constraint(m, i, j, k):
+        node_index = (i, j, k)
+        if not node_below_adjacent_elements(node_index, surface):
+            return pyo.Constraint.Skip  # nothing to support above this pixel
+        numerator = pyo.tanh(
+            heaviside_regularization_parameter * (m.nodal_support[i, j, k] - threshold_heaviside_value)
+        )
+        return m.nodal_projection[i, j, k] == (heaviside_constant + numerator) / denominator
+
+    model.nodal_projection_constraint = pyo.Constraint(
+        model.I, model.J, pyo.RangeSet(0, K - 1),
+        rule=nodal_projection_constraint
     )
 
     # the nodal density is determined from whether material should be placed and whether it may be placed
@@ -234,7 +406,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
         return m.nodal_density[i, j, k] == m.nodal_design[i, j, k] * m.nodal_support[i, j, k]
 
     model.nodal_density_constraint = pyo.Constraint(
-        model.I, model.J, pyo.RangeSet(1, K - 1),  # ignore z=0 where the build plate is
+        model.I, model.J, pyo.RangeSet(0, K - 1),
         rule=nodal_density_constraint
     )
 
@@ -280,8 +452,9 @@ def weighted_filtered_local_neighborhood_nodes_for_element(index, feature_radius
         surface
     )
     weighted_neighbors = []
+    factor = 1 / len(neighbors)
     for neighbor in neighbors:
-        factor = weighting_factor(elemental_index_to_nodal_index(index), neighbor, feature_radius_pixels)
+        # factor = weighting_factor(elemental_index_to_nodal_index(index), neighbor, feature_radius_pixels)
         weighted_neighbors.append((neighbor, factor))
     return weighted_neighbors
 
@@ -295,7 +468,6 @@ def local_neighborhood_nodes_for_element(index, feature_radius_pixels):
     :param feature_radius_pixels: minimum feature radius, in pixels
     :return: the indices of the local neighborhood set
     """
-    # TODO: there might be an off-by-one error in here
     neighbors = set()
     x, y, z = elemental_index_to_nodal_index(index)
     # allow our first index to vary the entire range
@@ -313,7 +485,7 @@ def supporting_nodes_for_node(index, feature_radius_pixels, self_supporting_angl
     """
     supporting_nodes_for_node returns the indices of nodes in the conical section of a sphere of the given radius
     from the original node. The conical section is truncated from the sphere by using the self supporting angle.
-    :param index: the node for which we want the supporting set
+    am index: the node for which we want the supporting set
     :param feature_radius_pixels: minimum feature radius, in pixels
     :param self_supporting_angle_degrees: minimum self supporting angle, in degrees
     :return: the indices of the supporting set
@@ -409,11 +581,11 @@ def node_below_adjacent_elements(node, surface):
     :return: boolean
     """
     (i, j, k) = node
-    maximum = 0
+    maximum = -1
     for location in [(i - 1, j - 1), (i, j - 1), (i - 1, j), (i, j)]:
-        if 0 <= i < surface.shape[0] and 0 <= j < surface.shape[1]:
+        if 0 <= location[0] < surface.shape[0] and 0 <= location[1] < surface.shape[1]:
             maximum = max(maximum, surface[location])
-    return k <= maximum + 1
+    return k <= maximum
 
 
 def elemental_index_to_nodal_index(index):

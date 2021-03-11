@@ -1,0 +1,7 @@
+{
+  "support": {
+    "plot_input_surface": true,
+    "plot_surface_indices": true,
+    "plot_optimization_parameters": true
+  }
+}

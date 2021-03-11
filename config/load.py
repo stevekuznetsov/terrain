@@ -174,7 +174,7 @@ def load(path):
         data = json.load(f)
         jsonschema.validate(instance=data, schema=schema)
         validate(data)
-    # We will use this hash in a directory anme and don't want this directory
+    # We will use this hash in a directory name and don't want this directory
     # name to be too long so we truncate the hash. This increases chances of
     # collision but we can tolerate it as our input space is tiny.
     hash = sha256(json.dumps(data).encode("utf-8")).hexdigest()[:15]

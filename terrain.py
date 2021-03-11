@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
-from config.load import load
+import config.load
+import config.debug
 from tiff.resize import resize
 from tiff.parcels import subdivide
 from tiff.visualize import parcel, support
@@ -15,6 +16,7 @@ import numpy
 def main():
     parser = argparse.ArgumentParser(description="Process GeoTiff data into 3D models.")
     parser.add_argument("--configuration", help="Path to the configuration.", required=True)
+    parser.add_argument("--debug-configuration", help="Path to the debug configuration.")
     parser.add_argument("--cache", help="Cache base directory.", default=str(Path.home().joinpath("terrain")))
     parser.add_argument("--loglevel", help="Logging verbosity level.", default="INFO")
     parser.add_argument("--visualize-parcel", help="Index of a parcel to visualize, as 'x,y'.")
@@ -27,11 +29,13 @@ def main():
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter(fmt='%(asctime)s %(levelname)-8s %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
     logger.addHandler(handler)
-    conf, hash = load(args.configuration)
+    conf, hash = config.load.load(args.configuration)
     cache_dir = Path(args.cache).joinpath(hash)
     logger.info("Initializing cache to " + str(cache_dir))
     cache_dir.mkdir(parents=True, exist_ok=True)
     conf["meta"] = {"cache": cache_dir, "logger": logger}
+
+    debug_conf = config.debug.load(args.debug_configuration)
 
     data = resize(conf, logger)
     parcels = subdivide(conf, data, logger)
@@ -48,8 +52,8 @@ def main():
     if args.calculate_support is not None:
         logger.info("Calculating optimal support for parcel {}".format(args.calculate_support))
         index = index_from_flag(args.calculate_support)
-        generate_support(conf, index, parcels, logger)
-    supports = generate_supports(conf, parcels, logger)
+        generate_support(conf, debug_conf["support"], index, parcels, logger)
+    supports = generate_supports(conf, debug_conf["support"], parcels, logger)
 
     if args.visualize_support is not None:
         logger.info("Visualizing supports for parcel {}".format(args.visualize_support))

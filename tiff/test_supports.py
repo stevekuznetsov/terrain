@@ -63,13 +63,16 @@ class TestSupports(unittest.TestCase):
             (11, 10, 12), (11, 11, 12),
         })
 
-    def test_indices_within_bounds(self):
+    def test_nodes_within_bounds(self):
         self.assertEqual(support.nodes_within_bounds(
             {(-1, 0, 1), (0, 0, 0), (0, 10, 1), (1, 1, 1)},
             (2, 2, 2)
         ), {
             (0, 0, 0), (1, 1, 1),
         })
+
+    def test_weighting_factor(self):
+        self.assertEqual(support.weighting_factor((0, 0, 0), (2, 2, 2), 10), (1 - 2 * math.sqrt(3) / 10))
 
     def test_elemental_index_to_nodal_index(self):
         self.assertEqual(support.elemental_index_to_nodal_index((0, 0, 0)), (0.5, 0.5, 0.5))
@@ -95,10 +98,10 @@ class TestSupports(unittest.TestCase):
             [2.0, 3.0],
         ])
         self.assertEqual(support.node_below_adjacent_elements((0, 0, 0), surface), True)
-        self.assertEqual(support.node_below_adjacent_elements((0, 0, 1), surface), True)
-        self.assertEqual(support.node_below_adjacent_elements((0, 1, 2), surface), True)
-        self.assertEqual(support.node_below_adjacent_elements((1, 0, 2), surface), True)
-        self.assertEqual(support.node_below_adjacent_elements((1, 1, 4), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((0, 0, 0), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((0, 1, 1), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((1, 0, 1), surface), True)
+        self.assertEqual(support.node_below_adjacent_elements((1, 1, 3), surface), True)
 
 
 if __name__ == '__main__':

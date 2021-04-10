@@ -2,6 +2,7 @@ import unittest
 import math
 import numpy
 from tiff import support
+import pyomo.environ as pyo
 
 
 class TestSupports(unittest.TestCase):
@@ -102,6 +103,13 @@ class TestSupports(unittest.TestCase):
         self.assertEqual(support.node_below_adjacent_elements((0, 1, 1), surface), True)
         self.assertEqual(support.node_below_adjacent_elements((1, 0, 1), surface), True)
         self.assertEqual(support.node_below_adjacent_elements((1, 1, 3), surface), True)
+
+    def test_is_assigned(self):
+        model = pyo.ConcreteModel()
+        model.x = pyo.Var(domain=pyo.NonNegativeReals)
+        self.assertEqual(support.is_assigned(model.x), False)
+        model.x = 1.5
+        self.assertEqual(support.is_assigned(model.x), True)
 
 
 if __name__ == '__main__':

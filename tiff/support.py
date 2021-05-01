@@ -135,9 +135,13 @@ def generate_support_for_surface(config, debug_config, surface, logger):
     logger.debug("Instantiating model...")
     instance_start = datetime.now()
     feature_radius_pixels = 1
+    elemental_neighborhood_constraints = elemental_neighborhood_constraint_factory(
+        i, j, k, indices, feature_radius_pixels
+    )
     model = concrete_model(
         (i, j, k), indices, feature_radius_pixels,
-        config["model"]["support"]["self_supporting_angle_degrees"], 20.0, 1.0, logger
+        config["model"]["support"]["self_supporting_angle_degrees"], 20.0, 1.0, logger,
+        elemental_neighborhood_constraints
     )
     logger.debug("Instantiating model took {}.".format(datetime.now() - instance_start))
     fixing_start = datetime.now()
@@ -208,8 +212,8 @@ def generate_support_for_surface(config, debug_config, surface, logger):
                 if not model.elemental_density[I, J, K].value:
                     model.elemental_density[I, J, K] = 0
 
-    init_elemental_neighborhood_constraint = elemental_neighborhood_constraint(
-        i, j, k, indices, feature_radius_pixels, constraint_value_getter, value_producer
+    init_elemental_neighborhood_constraint = elemental_neighborhood_constraints(
+        constraint_value_getter, value_producer
     )
     # First we do elemental neighborhood and nodal support for all indices, then we calculate projection since that depends on support
     for I in range(i):
@@ -390,24 +394,28 @@ def value_producer(_, value):
 
 
 # the elemental neighborhood is computed from a weighted average of surrounding nodes
-def elemental_neighborhood_constraint(I_e, J_e, K_e, surface, feature_radius_pixels, getter, producer):
-    def rule(m, i_e, j_e, k_e):
-        if k_e > surface[i_e, j_e]:
-            return pyo.Constraint.Skip
-        element_index = (i_e, j_e, k_e)
-        neighborhood_densities = []
-        for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
-        ):
-            (x, y, z) = neighbor
-            neighborhood_densities.append(factor * getter(m.nodal_density, x, y, z))
-        return producer(getter(m.elemental_neighborhood, i_e, j_e, k_e), sum(neighborhood_densities))
+def elemental_neighborhood_constraint_factory(I_e, J_e, K_e, surface, feature_radius_pixels):
+    def constraint(getter, producer):
+        def rule(m, i_e, j_e, k_e):
+            if k_e > surface[i_e, j_e]:
+                return pyo.Constraint.Skip
+            element_index = (i_e, j_e, k_e)
+            neighborhood_densities = []
+            for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
+                    element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
+            ):
+                (x, y, z) = neighbor
+                neighborhood_densities.append(factor * getter(m.nodal_density, x, y, z))
+            return producer(getter(m.elemental_neighborhood, i_e, j_e, k_e), sum(neighborhood_densities))
 
-    return rule
+        return rule
+
+    return constraint
 
 
 def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_degrees,
-                   heaviside_regularization_parameter, maximum_support_magnitude, logger):
+                   heaviside_regularization_parameter, maximum_support_magnitude, logger,
+                   elemental_neighborhood_constraint):
     """
     abstract_model creates an abstract model for the topology optimization problem
     :param shape: shape of element mesh
@@ -456,7 +464,7 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
     model.elemental_neighborhood_constraint = pyo.Constraint(
         model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
         rule=elemental_neighborhood_constraint(
-            I_e, J_e, K_e, surface, feature_radius_pixels, constraint_getter, equality_constraint_producer
+            constraint_getter, equality_constraint_producer
         )
     )
 

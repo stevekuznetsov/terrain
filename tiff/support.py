@@ -207,20 +207,17 @@ def generate_support_for_surface(config, debug_config, surface, logger):
             for K in range(k):
                 if not model.elemental_density[I, J, K].value:
                     model.elemental_density[I, J, K] = 0
+
+    init_elemental_neighborhood_constraint = elemental_neighborhood_constraint(
+        i, j, k, indices, feature_radius_pixels, constraint_value_getter, value_producer
+    )
     # First we do elemental neighborhood and nodal support for all indices, then we calculate projection since that depends on support
     for I in range(i):
         for J in range(j):
             for K in range(1, k):  # Ignore the build plate
                 # Elemental neighborhood
                 if K <= indices[I, J]:
-                    element_index = (I, J, K)
-                    neighborhood_densities = []
-                    for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                            element_index, feature_radius_pixels, (i, j, k), indices
-                    ):
-                        (x, y, z) = neighbor
-                        neighborhood_densities.append(factor * pyo.value(model.nodal_density[x, y, z]))
-                    model.elemental_neighborhood[I, J, K] = sum(neighborhood_densities)
+                    model.elemental_neighborhood[I, J, K] = init_elemental_neighborhood_constraint(model, I, J, K)
     for I in range(i + 1):
         for J in range(j + 1):
             for K in range(1, k + 1):  # Ignore the build plate
@@ -345,6 +342,70 @@ def extract_and_plot(model, i, j, k):
     plt.show()
 
 
+def constraint_getter(c: pyo.Constraint, i: int, j: int, k: int) -> pyo.Component:
+    """
+    This getter returns the actual component inside of a Pyomo constraint.
+
+    :param c: the constraint to be indexed
+    :param i: 1st index
+    :param j: 2nd index
+    :param k: 3rd index
+    :return: the component at this index for the constraint
+    """
+    return c[i, j, k]
+
+
+def constraint_value_getter(c: pyo.Constraint, i: int, j: int, k: int) -> float:
+    """
+    This getter returns the value of a Pyomo constraint variable.
+
+    :param c: the constraint to be indexed
+    :param i: 1st index
+    :param j: 2nd index
+    :param k: 3rd index
+    :return: the value at this index for the constraint
+    """
+    return c[i, j, k].value
+
+
+def equality_constraint_producer(target, value):
+    """
+    This producer returns an equality constraint given the inputs.
+
+    :param target: the target variable
+    :param value: the values to equate it to
+    :return: the equality constraint
+    """
+    return target == value
+
+
+def value_producer(_, value):
+    """
+    This producer returns the value itself.
+
+    :param value: the values
+    :return: the values
+    """
+    return value
+
+
+# the elemental neighborhood is computed from a weighted average of surrounding nodes
+def elemental_neighborhood_constraint(I_e, J_e, K_e, surface, feature_radius_pixels, getter, producer):
+    def rule(m, i_e, j_e, k_e):
+        if k_e > surface[i_e, j_e]:
+            return pyo.Constraint.Skip
+        element_index = (i_e, j_e, k_e)
+        neighborhood_densities = []
+        for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
+                element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
+        ):
+            (x, y, z) = neighbor
+            neighborhood_densities.append(factor * getter(m.nodal_density, x, y, z))
+        return producer(getter(m.elemental_neighborhood, i_e, j_e, k_e), sum(neighborhood_densities))
+
+    return rule
+
+
 def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_degrees,
                    heaviside_regularization_parameter, maximum_support_magnitude, logger):
     """
@@ -392,22 +453,11 @@ def concrete_model(shape, surface, feature_radius_pixels, self_supporting_angle_
     # nodal_design (psi^i) is independent and shows where material should be placed
     model.nodal_design = pyo.Var(model.I, model.J, model.K, domain=pyo.UnitInterval)
 
-    # the elemental neighborhood is computed from a weighted average of surrounding nodes
-    def elemental_neighborhood_constraint(m, i_e, j_e, k_e):
-        if k_e > surface[i_e, j_e]:
-            return pyo.Constraint.Skip
-        element_index = (i_e, j_e, k_e)
-        neighborhood_densities = []
-        for neighbor, factor in weighted_filtered_local_neighborhood_nodes_for_element(
-                element_index, feature_radius_pixels, (I_e, J_e, K_e), surface
-        ):
-            (x, y, z) = neighbor
-            neighborhood_densities.append(factor * m.nodal_density[x, y, z])
-        return m.elemental_neighborhood[i_e, j_e, k_e] == sum(neighborhood_densities)
-
     model.elemental_neighborhood_constraint = pyo.Constraint(
         model.I_e, model.J_e, pyo.RangeSet(1, K_e - 1),  # ignore z=0 where the build plate is
-        rule=elemental_neighborhood_constraint
+        rule=elemental_neighborhood_constraint(
+            I_e, J_e, K_e, surface, feature_radius_pixels, constraint_getter, equality_constraint_producer
+        )
     )
 
     # the elemental density is constrained by the support densities in the nearby nodes, to ensure
